@@ -1,0 +1,53 @@
+# Local infrastructure for development, demos and integration tests.
+#   docker compose up -d                    everything
+#   docker compose up -d postgres redis     only what the integration tests need
+# The api and the worker run on the host (pnpm dev), not in containers. Day 4 adds a full profile.
+name: hookdeck-lite
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: hookdeck
+      POSTGRES_PASSWORD: hookdeck
+      POSTGRES_DB: hookdeck
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      # Runs once, when the data volume is first created: adds the hookdeck_test database.
+      - ./docker/postgres-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U hookdeck -d hookdeck']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:8-alpine
+    # noeviction: when memory is full Redis refuses writes instead of deleting keys.
+    # With any other policy it may silently delete BullMQ's queue keys, and jobs vanish.
+    # See docs/learning/bullmq-101.md#pitfalls
+    command: ['redis-server', '--maxmemory-policy', 'noeviction']
+    ports:
+      - '6379:6379'
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  mock-receiver:
+    build:
+      context: .
+      dockerfile: tools/mock-receiver/Dockerfile
+    # init: true puts a tiny init process in front of Node so SIGTERM reaches it and the
+    # container stops immediately. See docs/QUEUES.md#graceful-shutdown
+    init: true
+    environment:
+      MOCK_RECEIVER_PORT: '4000'
+    ports:
+      - '4000:4000'
+
+volumes:
+  postgres-data:

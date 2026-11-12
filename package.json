@@ -15,7 +15,13 @@
     "test": "turbo run test",
     "test:integration": "turbo run test:integration",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "setup:env": "tsx scripts/setup-env.ts",
+    "db:generate": "turbo run db:generate",
+    "db:migrate": "turbo run db:migrate",
+    "db:migrate:dev": "pnpm --filter @hdl/database run db:migrate:dev",
+    "db:seed": "turbo run db:seed",
+    "db:studio": "pnpm --filter @hdl/database run db:studio"
   },
   "devDependencies": {
     "@eslint/js": "catalog:",
