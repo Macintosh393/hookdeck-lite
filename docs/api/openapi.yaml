@@ -1,0 +1,1495 @@
+openapi: 3.1.0
+info:
+  title: hookdeck-lite API
+  version: 1.0.0
+  description: |
+    HTTP contract for hookdeck-lite.
+
+    - **Ingestion** (`/in/{sourceSlug}`) is called by webhook providers. It is authenticated by the
+      source's signature verification mode, not by an API key.
+    - **Management** (`/api/v1/*`) is called by the dashboard and by scripts. It requires
+      `Authorization: Bearer <api key>`. Every response is scoped to the key's tenant.
+    - **Probes** (`/health`, `/ready`) are unauthenticated.
+
+    Conventions:
+    - Lists are ordered newest first and use cursor pagination: `?limit=50&cursor=<opaque>`.
+      The response carries `pagination.nextCursor` (null on the last page).
+    - Every error has the same shape: `{ "error": { "code", "message", "details"?, "requestId" } }`.
+    - Ids are UUID v7 strings. Timestamps are ISO-8601 in UTC.
+    - Names used here are canonical. See docs/ARCHITECTURE.md#canonical-names.
+servers:
+  - url: http://localhost:3001
+    description: Local development
+tags:
+  - name: Ingestion
+  - name: Sources
+  - name: Destinations
+  - name: Connections
+  - name: Events
+  - name: Deliveries
+  - name: Metrics
+  - name: Stream
+  - name: Account
+  - name: Probes
+security:
+  - ApiKey: []
+
+paths:
+  /in/{sourceSlug}:
+    post:
+      tags: [Ingestion]
+      operationId: ingestWebhook
+      summary: Receive a webhook
+      description: |
+        Verifies the signature (per the source's mode), applies the tenant's rate limit, deduplicates on
+        the source's dedupe header, stores the event, and returns `202`. Delivery happens asynchronously.
+        A `202` means the event is stored in Postgres.
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/SourceSlug'
+        - name: webhook-id
+          in: header
+          description: Standard Webhooks message id. Used for deduplication in `standard-webhooks` mode.
+          schema: { type: string }
+          example: msg_2KWPBgLlAfxdpx2AI54pPJ85f4W
+        - name: webhook-timestamp
+          in: header
+          description: Unix seconds. Required in `standard-webhooks` mode.
+          schema: { type: string }
+          example: '1794480000'
+        - name: webhook-signature
+          in: header
+          description: Space-separated `v1,<base64>` signatures. Required in `standard-webhooks` mode.
+          schema: { type: string }
+          example: v1,K5oZfzN95Z9UVu1EsfQmfVNQhnkZ2pj9o9NDN/H/pI4=
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: true }
+            example:
+              type: order.created
+              timestamp: '2026-11-12T10:00:00.000Z'
+              data: { id: ord_123, amount: 250, currency: EUR }
+      responses:
+        '202':
+          description: Stored. `status` is `duplicate` when an event with the same external id already exists.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IngestResponse' }
+              examples:
+                accepted:
+                  value: { id: 019a7b2e-6c1f-7a3b-9d4e-2f1a8c5b7e90, status: accepted }
+                duplicate:
+                  value: { id: 019a7b2e-6c1f-7a3b-9d4e-2f1a8c5b7e90, status: duplicate }
+        '400':
+          description: The body is not valid JSON or not valid UTF-8.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+              example:
+                error: { code: VALIDATION_ERROR, message: Request body is not valid JSON., requestId: req_01 }
+        '401':
+          description: Signature missing, wrong, or timestamp outside the tolerance window.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+              example:
+                error: { code: INVALID_SIGNATURE, message: Signature verification failed., requestId: req_02 }
+        '404':
+          description: Unknown or disabled source.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+              example:
+                error: { code: NOT_FOUND, message: Source not found., requestId: req_03 }
+        '413':
+          description: Body larger than INGEST_MAX_BODY_BYTES.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+              example:
+                error: { code: PAYLOAD_TOO_LARGE, message: Body exceeds 1048576 bytes., requestId: req_04 }
+        '415':
+          description: Content type is not application/json.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+              example:
+                error: { code: UNSUPPORTED_MEDIA_TYPE, message: Only application/json is accepted., requestId: req_05 }
+        '429':
+          description: The tenant's ingestion rate limit is exceeded.
+          headers:
+            Retry-After:
+              description: Seconds to wait before retrying.
+              schema: { type: integer }
+              example: 17
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+              example:
+                error: { code: RATE_LIMITED, message: Rate limit exceeded. Retry after 17 seconds., requestId: req_06 }
+        '503':
+          description: The event could not be stored (Postgres unavailable). The provider should retry.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+              example:
+                error: { code: SERVICE_UNAVAILABLE, message: Temporarily unable to accept events., requestId: req_07 }
+
+  /api/v1/whoami:
+    get:
+      tags: [Account]
+      operationId: whoami
+      summary: Identify the API key
+      description: Used by the dashboard's "enter API key" screen to validate a key.
+      responses:
+        '200':
+          description: The tenant and key behind the request.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Whoami' }
+              example:
+                tenant: { id: 019a7b00-0000-7000-8000-000000000001, name: Demo Tenant, ingestRateLimit: 600 }
+                apiKey: { prefix: demo1234, name: Seed key }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/v1/sources:
+    get:
+      tags: [Sources]
+      operationId: listSources
+      summary: List sources
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: A page of sources.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, pagination]
+                properties:
+                  data: { type: array, items: { $ref: '#/components/schemas/Source' } }
+                  pagination: { $ref: '#/components/schemas/Pagination' }
+              example:
+                data:
+                  - id: 019a7b10-0000-7000-8000-000000000010
+                    name: Stripe (test)
+                    slug: stripe-test-k3f9a2
+                    enabled: true
+                    verificationMode: standard-webhooks
+                    verificationConfig: { mode: standard-webhooks }
+                    dedupeHeader: webhook-id
+                    hasSecret: true
+                    createdAt: '2026-11-12T09:00:00.000Z'
+                    updatedAt: '2026-11-12T09:00:00.000Z'
+                pagination: { nextCursor: null, hasMore: false }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      tags: [Sources]
+      operationId: createSource
+      summary: Create a source
+      description: |
+        The slug is generated from the name plus a random suffix. If `secret` is omitted in
+        `standard-webhooks` mode, one is generated. The secret is never returned by any endpoint;
+        keep the value you send.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SourceCreate' }
+            examples:
+              standardWebhooks:
+                value:
+                  name: Stripe (test)
+                  verificationMode: standard-webhooks
+                  verificationConfig: { mode: standard-webhooks }
+                  secret: whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw
+              githubStyle:
+                value:
+                  name: GitHub
+                  verificationMode: generic-hmac
+                  verificationConfig:
+                    mode: generic-hmac
+                    signatureHeader: x-hub-signature-256
+                    signaturePrefix: sha256=
+                    signatureEncoding: hex
+                  secret: my-github-webhook-secret
+                  dedupeHeader: x-github-delivery
+      responses:
+        '201':
+          description: Created.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Source' }
+              example:
+                id: 019a7b10-0000-7000-8000-000000000010
+                name: Stripe (test)
+                slug: stripe-test-k3f9a2
+                enabled: true
+                verificationMode: standard-webhooks
+                verificationConfig: { mode: standard-webhooks }
+                dedupeHeader: webhook-id
+                hasSecret: true
+                createdAt: '2026-11-12T09:00:00.000Z'
+                updatedAt: '2026-11-12T09:00:00.000Z'
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/v1/sources/{sourceId}:
+    parameters:
+      - $ref: '#/components/parameters/SourceId'
+    get:
+      tags: [Sources]
+      operationId: getSource
+      summary: Get a source
+      responses:
+        '200':
+          description: The source.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Source' }
+              example:
+                id: 019a7b10-0000-7000-8000-000000000010
+                name: Stripe (test)
+                slug: stripe-test-k3f9a2
+                enabled: true
+                verificationMode: standard-webhooks
+                verificationConfig: { mode: standard-webhooks }
+                dedupeHeader: webhook-id
+                hasSecret: true
+                createdAt: '2026-11-12T09:00:00.000Z'
+                updatedAt: '2026-11-12T09:00:00.000Z'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [Sources]
+      operationId: updateSource
+      summary: Update a source
+      description: Changes take effect on ingestion within 30 seconds (the source cache TTL).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SourceUpdate' }
+            example: { enabled: false }
+      responses:
+        '200':
+          description: Updated.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Source' }
+              example:
+                id: 019a7b10-0000-7000-8000-000000000010
+                name: Stripe (test)
+                slug: stripe-test-k3f9a2
+                enabled: false
+                verificationMode: standard-webhooks
+                verificationConfig: { mode: standard-webhooks }
+                dedupeHeader: webhook-id
+                hasSecret: true
+                createdAt: '2026-11-12T09:00:00.000Z'
+                updatedAt: '2026-11-12T09:30:00.000Z'
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [Sources]
+      operationId: deleteSource
+      summary: Delete a source
+      description: Also deletes the source's connections, events, deliveries, and attempts.
+      responses:
+        '204': { description: Deleted. }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/destinations:
+    get:
+      tags: [Destinations]
+      operationId: listDestinations
+      summary: List destinations
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: A page of destinations.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, pagination]
+                properties:
+                  data: { type: array, items: { $ref: '#/components/schemas/Destination' } }
+                  pagination: { $ref: '#/components/schemas/Pagination' }
+              example:
+                data:
+                  - id: 019a7b20-0000-7000-8000-000000000020
+                    name: Orders service
+                    url: https://orders.example.com/webhooks
+                    enabled: true
+                    disabledReason: null
+                    createdAt: '2026-11-12T09:05:00.000Z'
+                    updatedAt: '2026-11-12T09:05:00.000Z'
+                pagination: { nextCursor: null, hasMore: false }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      tags: [Destinations]
+      operationId: createDestination
+      summary: Create a destination
+      description: |
+        The URL is checked against the SSRF rules (scheme, DNS resolution, blocked IP ranges).
+        A signing secret is generated and returned **only in this response**.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DestinationCreate' }
+            example: { name: Orders service, url: 'https://orders.example.com/webhooks' }
+      responses:
+        '201':
+          description: Created. Store `signingSecret` now; it is not shown again.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DestinationWithSecret' }
+              example:
+                id: 019a7b20-0000-7000-8000-000000000020
+                name: Orders service
+                url: https://orders.example.com/webhooks
+                enabled: true
+                disabledReason: null
+                signingSecret: whsec_C2FVsBQIhrscChlQIMV+b5sSYspob7oD
+                createdAt: '2026-11-12T09:05:00.000Z'
+                updatedAt: '2026-11-12T09:05:00.000Z'
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '422': { $ref: '#/components/responses/DestinationUrlNotAllowed' }
+
+  /api/v1/destinations/{destinationId}:
+    parameters:
+      - $ref: '#/components/parameters/DestinationId'
+    get:
+      tags: [Destinations]
+      operationId: getDestination
+      summary: Get a destination
+      responses:
+        '200':
+          description: The destination.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Destination' }
+              example:
+                id: 019a7b20-0000-7000-8000-000000000020
+                name: Orders service
+                url: https://orders.example.com/webhooks
+                enabled: true
+                disabledReason: null
+                createdAt: '2026-11-12T09:05:00.000Z'
+                updatedAt: '2026-11-12T09:05:00.000Z'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [Destinations]
+      operationId: updateDestination
+      summary: Update a destination
+      description: A changed URL is checked against the SSRF rules. Setting `enabled` to true clears `disabledReason`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DestinationUpdate' }
+            example: { url: 'https://orders.example.com/hooks/v2' }
+      responses:
+        '200':
+          description: Updated.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Destination' }
+              example:
+                id: 019a7b20-0000-7000-8000-000000000020
+                name: Orders service
+                url: https://orders.example.com/hooks/v2
+                enabled: true
+                disabledReason: null
+                createdAt: '2026-11-12T09:05:00.000Z'
+                updatedAt: '2026-11-12T09:40:00.000Z'
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/DestinationUrlNotAllowed' }
+    delete:
+      tags: [Destinations]
+      operationId: deleteDestination
+      summary: Delete a destination
+      description: Also deletes the destination's connections, deliveries, and attempts.
+      responses:
+        '204': { description: Deleted. }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/destinations/{destinationId}/rotate-secret:
+    parameters:
+      - $ref: '#/components/parameters/DestinationId'
+    post:
+      tags: [Destinations]
+      operationId: rotateDestinationSecret
+      summary: Rotate the signing secret
+      description: Generates a new signing secret. The old one stops being used immediately.
+      responses:
+        '200':
+          description: The destination with its new secret, shown once.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DestinationWithSecret' }
+              example:
+                id: 019a7b20-0000-7000-8000-000000000020
+                name: Orders service
+                url: https://orders.example.com/webhooks
+                enabled: true
+                disabledReason: null
+                signingSecret: whsec_8zQ0mVtYp1nH3kWc5eRb7uJx9aLd2sFg
+                createdAt: '2026-11-12T09:05:00.000Z'
+                updatedAt: '2026-11-12T10:00:00.000Z'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/destinations/{destinationId}/replay-dead:
+    parameters:
+      - $ref: '#/components/parameters/DestinationId'
+    post:
+      tags: [Deliveries]
+      operationId: replayDeadForDestination
+      summary: Replay all DEAD deliveries for a destination
+      description: |
+        Creates a replay for every `DEAD` delivery of this destination that has not been replayed yet,
+        up to 1000 per call. Call again while `hasMore` is true. Originals are not modified.
+      responses:
+        '202':
+          description: Replays created and enqueued.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BulkReplayResponse' }
+              example: { replayedCount: 42, hasMore: false }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: The destination is disabled.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+              example:
+                error: { code: CONFLICT, message: Destination is disabled. Enable it before replaying., requestId: req_20 }
+
+  /api/v1/connections:
+    get:
+      tags: [Connections]
+      operationId: listConnections
+      summary: List connections
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+        - name: sourceId
+          in: query
+          schema: { type: string, format: uuid }
+        - name: destinationId
+          in: query
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: A page of connections.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, pagination]
+                properties:
+                  data: { type: array, items: { $ref: '#/components/schemas/Connection' } }
+                  pagination: { $ref: '#/components/schemas/Pagination' }
+              example:
+                data:
+                  - id: 019a7b30-0000-7000-8000-000000000030
+                    name: Paid orders to Orders service
+                    sourceId: 019a7b10-0000-7000-8000-000000000010
+                    destinationId: 019a7b20-0000-7000-8000-000000000020
+                    enabled: true
+                    filter: { body: { type: order.created, data.amount: { $gte: 100 } } }
+                    createdAt: '2026-11-12T09:10:00.000Z'
+                    updatedAt: '2026-11-12T09:10:00.000Z'
+                pagination: { nextCursor: null, hasMore: false }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      tags: [Connections]
+      operationId: createConnection
+      summary: Create a connection
+      description: One connection per (source, destination) pair. The filter is validated against docs/FILTER-RULES.md.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ConnectionCreate' }
+            example:
+              name: Paid orders to Orders service
+              sourceId: 019a7b10-0000-7000-8000-000000000010
+              destinationId: 019a7b20-0000-7000-8000-000000000020
+              filter: { body: { type: order.created, data.amount: { $gte: 100 } } }
+      responses:
+        '201':
+          description: Created.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Connection' }
+              example:
+                id: 019a7b30-0000-7000-8000-000000000030
+                name: Paid orders to Orders service
+                sourceId: 019a7b10-0000-7000-8000-000000000010
+                destinationId: 019a7b20-0000-7000-8000-000000000020
+                enabled: true
+                filter: { body: { type: order.created, data.amount: { $gte: 100 } } }
+                createdAt: '2026-11-12T09:10:00.000Z'
+                updatedAt: '2026-11-12T09:10:00.000Z'
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: A connection between this source and destination already exists.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+              example:
+                error: { code: CONFLICT, message: A connection for this source and destination already exists., requestId: req_30 }
+
+  /api/v1/connections/{connectionId}:
+    parameters:
+      - $ref: '#/components/parameters/ConnectionId'
+    get:
+      tags: [Connections]
+      operationId: getConnection
+      summary: Get a connection
+      responses:
+        '200':
+          description: The connection.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Connection' }
+              example:
+                id: 019a7b30-0000-7000-8000-000000000030
+                name: Paid orders to Orders service
+                sourceId: 019a7b10-0000-7000-8000-000000000010
+                destinationId: 019a7b20-0000-7000-8000-000000000020
+                enabled: true
+                filter: null
+                createdAt: '2026-11-12T09:10:00.000Z'
+                updatedAt: '2026-11-12T09:10:00.000Z'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [Connections]
+      operationId: updateConnection
+      summary: Update a connection
+      description: 'Source and destination cannot be changed. Send `filter: null` to remove the filter.'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ConnectionUpdate' }
+            example: { filter: { headers: { x-environment: production } } }
+      responses:
+        '200':
+          description: Updated.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Connection' }
+              example:
+                id: 019a7b30-0000-7000-8000-000000000030
+                name: Paid orders to Orders service
+                sourceId: 019a7b10-0000-7000-8000-000000000010
+                destinationId: 019a7b20-0000-7000-8000-000000000020
+                enabled: true
+                filter: { headers: { x-environment: production } }
+                createdAt: '2026-11-12T09:10:00.000Z'
+                updatedAt: '2026-11-12T09:50:00.000Z'
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [Connections]
+      operationId: deleteConnection
+      summary: Delete a connection
+      description: Existing deliveries are kept; their `connectionId` becomes null.
+      responses:
+        '204': { description: Deleted. }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/events:
+    get:
+      tags: [Events]
+      operationId: listEvents
+      summary: List events
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+        - name: sourceId
+          in: query
+          schema: { type: string, format: uuid }
+        - name: status
+          in: query
+          schema: { $ref: '#/components/schemas/EventStatus' }
+        - name: from
+          in: query
+          description: Only events received at or after this time.
+          schema: { type: string, format: date-time }
+        - name: to
+          in: query
+          description: Only events received before this time.
+          schema: { type: string, format: date-time }
+      responses:
+        '200':
+          description: A page of events, without headers and body.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, pagination]
+                properties:
+                  data: { type: array, items: { $ref: '#/components/schemas/Event' } }
+                  pagination: { $ref: '#/components/schemas/Pagination' }
+              example:
+                data:
+                  - id: 019a7b2e-6c1f-7a3b-9d4e-2f1a8c5b7e90
+                    sourceId: 019a7b10-0000-7000-8000-000000000010
+                    status: FANNED_OUT
+                    externalEventId: msg_2KWPBgLlAfxdpx2AI54pPJ85f4W
+                    contentType: application/json
+                    bodyBytes: 118
+                    deliveryCount: 1
+                    filteredCount: 0
+                    failureReason: null
+                    receivedAt: '2026-11-12T10:00:00.120Z'
+                    fannedOutAt: '2026-11-12T10:00:00.160Z'
+                pagination: { nextCursor: MDE5YTdiMmUtNmMxZi03YTNiLTlkNGUtMmYxYThjNWI3ZTkw, hasMore: true }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/v1/events/{eventId}:
+    parameters:
+      - $ref: '#/components/parameters/EventId'
+    get:
+      tags: [Events]
+      operationId: getEvent
+      summary: Get an event with its payload and deliveries
+      responses:
+        '200':
+          description: The event, its stored request, and its deliveries (without attempts).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EventDetail' }
+              example:
+                id: 019a7b2e-6c1f-7a3b-9d4e-2f1a8c5b7e90
+                sourceId: 019a7b10-0000-7000-8000-000000000010
+                status: FANNED_OUT
+                externalEventId: msg_2KWPBgLlAfxdpx2AI54pPJ85f4W
+                contentType: application/json
+                bodyBytes: 118
+                deliveryCount: 1
+                filteredCount: 0
+                failureReason: null
+                receivedAt: '2026-11-12T10:00:00.120Z'
+                fannedOutAt: '2026-11-12T10:00:00.160Z'
+                headers: { content-type: application/json, webhook-id: msg_2KWPBgLlAfxdpx2AI54pPJ85f4W, webhook-signature: '[redacted]' }
+                query: {}
+                body: '{"type":"order.created","timestamp":"2026-11-12T10:00:00.000Z","data":{"id":"ord_123","amount":250,"currency":"EUR"}}'
+                deliveries:
+                  - id: 019a7b2e-7000-7000-8000-000000000040
+                    eventId: 019a7b2e-6c1f-7a3b-9d4e-2f1a8c5b7e90
+                    connectionId: 019a7b30-0000-7000-8000-000000000030
+                    destinationId: 019a7b20-0000-7000-8000-000000000020
+                    status: SUCCEEDED
+                    trigger: EVENT
+                    replayOfId: null
+                    attemptCount: 2
+                    maxAttempts: 10
+                    nextAttemptAt: null
+                    lastAttemptAt: '2026-11-12T10:00:21.300Z'
+                    lastStatusCode: 200
+                    lastErrorCode: null
+                    deadReason: null
+                    completedAt: '2026-11-12T10:00:21.380Z'
+                    createdAt: '2026-11-12T10:00:00.160Z'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/deliveries:
+    get:
+      tags: [Deliveries]
+      operationId: listDeliveries
+      summary: List deliveries
+      description: Use `status=DEAD` for the dead-letter view.
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+        - name: status
+          in: query
+          schema: { $ref: '#/components/schemas/DeliveryStatus' }
+        - name: destinationId
+          in: query
+          schema: { type: string, format: uuid }
+        - name: connectionId
+          in: query
+          schema: { type: string, format: uuid }
+        - name: eventId
+          in: query
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: A page of deliveries.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, pagination]
+                properties:
+                  data: { type: array, items: { $ref: '#/components/schemas/Delivery' } }
+                  pagination: { $ref: '#/components/schemas/Pagination' }
+              example:
+                data:
+                  - id: 019a7b2f-1000-7000-8000-000000000050
+                    eventId: 019a7b2f-0000-7000-8000-000000000051
+                    connectionId: 019a7b30-0000-7000-8000-000000000030
+                    destinationId: 019a7b20-0000-7000-8000-000000000020
+                    status: DEAD
+                    trigger: EVENT
+                    replayOfId: null
+                    attemptCount: 10
+                    maxAttempts: 10
+                    nextAttemptAt: null
+                    lastAttemptAt: '2026-11-12T12:41:10.000Z'
+                    lastStatusCode: 503
+                    lastErrorCode: HTTP_ERROR
+                    deadReason: RETRIES_EXHAUSTED
+                    completedAt: '2026-11-12T12:41:10.090Z'
+                    createdAt: '2026-11-12T10:05:00.000Z'
+                pagination: { nextCursor: null, hasMore: false }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/v1/deliveries/{deliveryId}:
+    parameters:
+      - $ref: '#/components/parameters/DeliveryId'
+    get:
+      tags: [Deliveries]
+      operationId: getDelivery
+      summary: Get a delivery with its attempts
+      responses:
+        '200':
+          description: The delivery and every attempt, oldest first.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DeliveryDetail' }
+              example:
+                id: 019a7b2e-7000-7000-8000-000000000040
+                eventId: 019a7b2e-6c1f-7a3b-9d4e-2f1a8c5b7e90
+                connectionId: 019a7b30-0000-7000-8000-000000000030
+                destinationId: 019a7b20-0000-7000-8000-000000000020
+                status: SUCCEEDED
+                trigger: EVENT
+                replayOfId: null
+                attemptCount: 2
+                maxAttempts: 10
+                nextAttemptAt: null
+                lastAttemptAt: '2026-11-12T10:00:21.300Z'
+                lastStatusCode: 200
+                lastErrorCode: null
+                deadReason: null
+                completedAt: '2026-11-12T10:00:21.380Z'
+                createdAt: '2026-11-12T10:00:00.160Z'
+                attempts:
+                  - id: 019a7b2e-7100-7000-8000-000000000041
+                    deliveryId: 019a7b2e-7000-7000-8000-000000000040
+                    attemptNumber: 1
+                    outcome: RETRYABLE_FAILURE
+                    statusCode: 503
+                    errorCode: HTTP_ERROR
+                    errorMessage: Destination responded with 503.
+                    startedAt: '2026-11-12T10:00:00.200Z'
+                    durationMs: 95
+                    retryAfterMs: 20000
+                    resolvedIp: 93.184.216.34
+                    requestHeaders: { content-type: application/json, webhook-id: 019a7b2e-6c1f-7a3b-9d4e-2f1a8c5b7e90, webhook-timestamp: '1794477600', webhook-signature: '[redacted]', x-hdl-attempt: '1' }
+                    responseHeaders: { retry-after: '20' }
+                    responseBody: Service Unavailable
+                    responseBodyTruncated: false
+                  - id: 019a7b2e-7200-7000-8000-000000000042
+                    deliveryId: 019a7b2e-7000-7000-8000-000000000040
+                    attemptNumber: 2
+                    outcome: SUCCESS
+                    statusCode: 200
+                    errorCode: null
+                    errorMessage: null
+                    startedAt: '2026-11-12T10:00:21.300Z'
+                    durationMs: 80
+                    retryAfterMs: null
+                    resolvedIp: 93.184.216.34
+                    requestHeaders: { content-type: application/json, webhook-id: 019a7b2e-6c1f-7a3b-9d4e-2f1a8c5b7e90, webhook-timestamp: '1794477621', webhook-signature: '[redacted]', x-hdl-attempt: '2' }
+                    responseHeaders: { content-type: application/json }
+                    responseBody: '{"ok":true}'
+                    responseBodyTruncated: false
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/deliveries/{deliveryId}/attempts:
+    parameters:
+      - $ref: '#/components/parameters/DeliveryId'
+    get:
+      tags: [Deliveries]
+      operationId: listDeliveryAttempts
+      summary: List the attempts of a delivery
+      description: Oldest first. Not paginated; a delivery has at most `maxAttempts` attempts.
+      responses:
+        '200':
+          description: The attempts.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { type: array, items: { $ref: '#/components/schemas/DeliveryAttempt' } }
+              example:
+                data:
+                  - id: 019a7b2e-7200-7000-8000-000000000042
+                    deliveryId: 019a7b2e-7000-7000-8000-000000000040
+                    attemptNumber: 1
+                    outcome: SUCCESS
+                    statusCode: 200
+                    errorCode: null
+                    errorMessage: null
+                    startedAt: '2026-11-12T10:00:21.300Z'
+                    durationMs: 80
+                    retryAfterMs: null
+                    resolvedIp: 93.184.216.34
+                    requestHeaders: { content-type: application/json, webhook-signature: '[redacted]' }
+                    responseHeaders: { content-type: application/json }
+                    responseBody: '{"ok":true}'
+                    responseBodyTruncated: false
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/deliveries/{deliveryId}/replay:
+    parameters:
+      - $ref: '#/components/parameters/DeliveryId'
+    post:
+      tags: [Deliveries]
+      operationId: replayDelivery
+      summary: Replay a delivery
+      description: |
+        Creates a **new** delivery for the same event and destination, with `trigger: REPLAY` and
+        `replayOfId` pointing at the original. The original and its attempts are never modified.
+        Allowed when the original is `DEAD` or `SUCCEEDED`. The replay uses the destination's current
+        URL and secret, and carries the same `webhook-id` as the original.
+      responses:
+        '202':
+          description: The new delivery.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Delivery' }
+              example:
+                id: 019a7b40-0000-7000-8000-000000000060
+                eventId: 019a7b2f-0000-7000-8000-000000000051
+                connectionId: 019a7b30-0000-7000-8000-000000000030
+                destinationId: 019a7b20-0000-7000-8000-000000000020
+                status: PENDING
+                trigger: REPLAY
+                replayOfId: 019a7b2f-1000-7000-8000-000000000050
+                attemptCount: 0
+                maxAttempts: 10
+                nextAttemptAt: null
+                lastAttemptAt: null
+                lastStatusCode: null
+                lastErrorCode: null
+                deadReason: null
+                completedAt: null
+                createdAt: '2026-11-12T13:00:00.000Z'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: The delivery is still in progress, or its destination is disabled.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+              example:
+                error: { code: CONFLICT, message: Only DEAD or SUCCEEDED deliveries can be replayed., requestId: req_40 }
+
+  /api/v1/metrics/summary:
+    get:
+      tags: [Metrics]
+      operationId: getMetricsSummary
+      summary: Totals, success rate, and latency percentiles
+      parameters:
+        - $ref: '#/components/parameters/Window'
+      responses:
+        '200':
+          description: Metrics for the window ending now.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MetricsSummary' }
+              example:
+                window: { from: '2026-11-11T13:00:00.000Z', to: '2026-11-12T13:00:00.000Z' }
+                eventsReceived: 1240
+                deliveries: { succeeded: 1198, dead: 12, pending: 3, retrying: 27 }
+                successRate: 0.9901
+                attemptLatencyMs: { p50: 84, p95: 310 }
+                endToEndLatencyMs: { p50: 120, p95: 46000 }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/v1/metrics/timeseries:
+    get:
+      tags: [Metrics]
+      operationId: getMetricsTimeseries
+      summary: Completed deliveries over time
+      description: 'Bucket width follows the window: `1h` → 1 minute, `24h` → 30 minutes, `7d` → 6 hours.'
+      parameters:
+        - $ref: '#/components/parameters/Window'
+      responses:
+        '200':
+          description: One point per bucket that has data.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MetricsTimeseries' }
+              example:
+                window: { from: '2026-11-12T12:00:00.000Z', to: '2026-11-12T13:00:00.000Z' }
+                bucketSeconds: 60
+                points:
+                  - { bucket: '2026-11-12T12:00:00.000Z', succeeded: 21, dead: 0 }
+                  - { bucket: '2026-11-12T12:01:00.000Z', succeeded: 18, dead: 1 }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/v1/stream:
+    get:
+      tags: [Stream]
+      operationId: stream
+      summary: Live stream of lifecycle events (Server-Sent Events)
+      description: |
+        A long-lived `text/event-stream` response. Each message has an `event:` line with the type and a
+        `data:` line with JSON. A comment line (`: ping`) is sent every 15 seconds to keep the connection open.
+
+        Message types: `event.received`, `event.fanned_out`, `delivery.created`, `delivery.attempted`.
+        Payloads are the `StreamMessage` type in docs/QUEUES.md.
+
+        Messages are not stored. After a reconnect, refetch lists over REST. `Last-Event-ID` is not supported.
+        Browsers must use `fetch` with a stream reader, because `EventSource` cannot send the Authorization header.
+      responses:
+        '200':
+          description: The stream.
+          content:
+            text/event-stream:
+              schema: { type: string }
+              example: |
+                : ping
+
+                event: event.received
+                data: {"type":"event.received","at":"2026-11-12T10:00:00.130Z","data":{"eventId":"019a7b2e-6c1f-7a3b-9d4e-2f1a8c5b7e90","sourceId":"019a7b10-0000-7000-8000-000000000010"}}
+
+                event: delivery.attempted
+                data: {"type":"delivery.attempted","at":"2026-11-12T10:00:00.300Z","data":{"deliveryId":"019a7b2e-7000-7000-8000-000000000040","eventId":"019a7b2e-6c1f-7a3b-9d4e-2f1a8c5b7e90","destinationId":"019a7b20-0000-7000-8000-000000000020","attemptNumber":1,"outcome":"RETRYABLE_FAILURE","statusCode":503,"errorCode":"HTTP_ERROR","durationMs":95,"status":"RETRYING","nextAttemptAt":"2026-11-12T10:00:20.300Z"}}
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /health:
+    get:
+      tags: [Probes]
+      operationId: health
+      summary: Liveness
+      description: Returns 200 whenever the process is running. Touches no dependency.
+      security: []
+      responses:
+        '200':
+          description: Alive.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: { type: string, const: ok }
+              example: { status: ok }
+
+  /ready:
+    get:
+      tags: [Probes]
+      operationId: ready
+      summary: Readiness
+      description: Checks Postgres (`SELECT 1`) and Redis (`PING`), each with a 1 second timeout.
+      security: []
+      responses:
+        '200':
+          description: Both dependencies respond.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Readiness' }
+              example: { status: ok, checks: { postgres: ok, redis: ok } }
+        '503':
+          description: At least one dependency does not respond.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Readiness' }
+              example: { status: unavailable, checks: { postgres: ok, redis: fail } }
+
+components:
+  securitySchemes:
+    ApiKey:
+      type: http
+      scheme: bearer
+      description: 'A tenant API key: `hdl_<prefix>_<secret>`.'
+
+  parameters:
+    SourceSlug:
+      name: sourceSlug
+      in: path
+      required: true
+      schema: { type: string, pattern: '^[a-z0-9-]{3,80}$' }
+      example: stripe-test-k3f9a2
+    SourceId:
+      name: sourceId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+      example: 019a7b10-0000-7000-8000-000000000010
+    DestinationId:
+      name: destinationId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+      example: 019a7b20-0000-7000-8000-000000000020
+    ConnectionId:
+      name: connectionId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+      example: 019a7b30-0000-7000-8000-000000000030
+    EventId:
+      name: eventId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+      example: 019a7b2e-6c1f-7a3b-9d4e-2f1a8c5b7e90
+    DeliveryId:
+      name: deliveryId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+      example: 019a7b2e-7000-7000-8000-000000000040
+    Limit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+      example: 50
+    Cursor:
+      name: cursor
+      in: query
+      description: The `pagination.nextCursor` of the previous page.
+      schema: { type: string }
+      example: MDE5YTdiMmUtNmMxZi03YTNiLTlkNGUtMmYxYThjNWI3ZTkw
+    Window:
+      name: window
+      in: query
+      schema: { type: string, enum: [1h, 24h, 7d], default: 24h }
+      example: 24h
+
+  responses:
+    Unauthorized:
+      description: Missing, malformed, unknown, or revoked API key.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+          example:
+            error: { code: UNAUTHORIZED, message: A valid API key is required., requestId: req_90 }
+    NotFound:
+      description: The resource does not exist in this tenant.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+          example:
+            error: { code: NOT_FOUND, message: Resource not found., requestId: req_91 }
+    ValidationError:
+      description: The request failed validation.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+          example:
+            error:
+              code: VALIDATION_ERROR
+              message: Request validation failed.
+              details:
+                - { path: name, message: Required }
+              requestId: req_92
+    DestinationUrlNotAllowed:
+      description: The URL failed the SSRF rules (scheme, DNS, or a blocked IP range).
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+          example:
+            error: { code: DESTINATION_URL_NOT_ALLOWED, message: The URL resolves to an address that is not allowed., requestId: req_93 }
+
+  schemas:
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message, requestId]
+          properties:
+            code:
+              type: string
+              enum:
+                - VALIDATION_ERROR
+                - UNAUTHORIZED
+                - NOT_FOUND
+                - CONFLICT
+                - INVALID_SIGNATURE
+                - RATE_LIMITED
+                - PAYLOAD_TOO_LARGE
+                - UNSUPPORTED_MEDIA_TYPE
+                - DESTINATION_URL_NOT_ALLOWED
+                - SERVICE_UNAVAILABLE
+                - INTERNAL
+            message: { type: string }
+            details:
+              type: array
+              items:
+                type: object
+                required: [path, message]
+                properties:
+                  path: { type: string }
+                  message: { type: string }
+            requestId: { type: string, description: Also sent as the x-request-id response header. }
+
+    Pagination:
+      type: object
+      required: [nextCursor, hasMore]
+      properties:
+        nextCursor: { type: [string, 'null'] }
+        hasMore: { type: boolean }
+
+    IngestResponse:
+      type: object
+      required: [id, status]
+      properties:
+        id: { type: string, format: uuid, description: The Event id. }
+        status: { type: string, enum: [accepted, duplicate] }
+
+    Whoami:
+      type: object
+      required: [tenant, apiKey]
+      properties:
+        tenant:
+          type: object
+          required: [id, name, ingestRateLimit]
+          properties:
+            id: { type: string, format: uuid }
+            name: { type: string }
+            ingestRateLimit: { type: integer, description: Requests per 60-second window. }
+        apiKey:
+          type: object
+          required: [prefix, name]
+          properties:
+            prefix: { type: string }
+            name: { type: string }
+
+    EventStatus:
+      type: string
+      enum: [RECEIVED, FANNED_OUT, FAILED]
+    DeliveryStatus:
+      type: string
+      enum: [PENDING, RETRYING, SUCCEEDED, DEAD]
+    DeliveryTrigger:
+      type: string
+      enum: [EVENT, REPLAY]
+    AttemptOutcome:
+      type: string
+      enum: [SUCCESS, RETRYABLE_FAILURE, PERMANENT_FAILURE]
+    VerificationMode:
+      type: string
+      enum: [standard-webhooks, generic-hmac, none]
+
+    VerificationConfig:
+      oneOf:
+        - type: object
+          required: [mode]
+          additionalProperties: false
+          properties:
+            mode: { type: string, const: standard-webhooks }
+        - type: object
+          required: [mode, signatureHeader, signatureEncoding]
+          additionalProperties: false
+          properties:
+            mode: { type: string, const: generic-hmac }
+            signatureHeader: { type: string, maxLength: 100 }
+            signaturePrefix: { type: string, maxLength: 32 }
+            signatureEncoding: { type: string, enum: [hex, base64] }
+            timestampHeader: { type: string, maxLength: 100 }
+        - type: object
+          required: [mode]
+          additionalProperties: false
+          properties:
+            mode: { type: string, const: none }
+      discriminator:
+        propertyName: mode
+
+    Source:
+      type: object
+      required: [id, name, slug, enabled, verificationMode, verificationConfig, dedupeHeader, hasSecret, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        slug: { type: string, description: 'Webhooks are sent to POST /in/{slug}.' }
+        enabled: { type: boolean }
+        verificationMode: { $ref: '#/components/schemas/VerificationMode' }
+        verificationConfig: { $ref: '#/components/schemas/VerificationConfig' }
+        dedupeHeader: { type: [string, 'null'] }
+        hasSecret: { type: boolean }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    SourceCreate:
+      type: object
+      required: [name, verificationMode]
+      additionalProperties: false
+      properties:
+        name: { type: string, minLength: 1, maxLength: 100 }
+        verificationMode: { $ref: '#/components/schemas/VerificationMode' }
+        verificationConfig: { $ref: '#/components/schemas/VerificationConfig' }
+        secret:
+          type: string
+          maxLength: 256
+          description: Required for generic-hmac. Optional for standard-webhooks (generated if omitted). Forbidden for none.
+        dedupeHeader:
+          type: [string, 'null']
+          maxLength: 100
+          description: Defaults to webhook-id for standard-webhooks and null otherwise.
+    SourceUpdate:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        name: { type: string, minLength: 1, maxLength: 100 }
+        enabled: { type: boolean }
+        verificationMode: { $ref: '#/components/schemas/VerificationMode' }
+        verificationConfig: { $ref: '#/components/schemas/VerificationConfig' }
+        secret: { type: string, maxLength: 256 }
+        dedupeHeader: { type: [string, 'null'], maxLength: 100 }
+
+    Destination:
+      type: object
+      required: [id, name, url, enabled, disabledReason, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        url: { type: string, format: uri }
+        enabled: { type: boolean }
+        disabledReason: { type: [string, 'null'], description: 'Set when disabled automatically, for example GONE_410.' }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    DestinationWithSecret:
+      allOf:
+        - $ref: '#/components/schemas/Destination'
+        - type: object
+          required: [signingSecret]
+          properties:
+            signingSecret: { type: string, description: 'whsec_ + base64 of 32 bytes. Shown once.' }
+    DestinationCreate:
+      type: object
+      required: [name, url]
+      additionalProperties: false
+      properties:
+        name: { type: string, minLength: 1, maxLength: 100 }
+        url: { type: string, format: uri, maxLength: 2048 }
+    DestinationUpdate:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        name: { type: string, minLength: 1, maxLength: 100 }
+        url: { type: string, format: uri, maxLength: 2048 }
+        enabled: { type: boolean }
+
+    Filter:
+      type: [object, 'null']
+      description: A filter rule. See docs/FILTER-RULES.md. Null matches every event.
+      additionalProperties: true
+
+    Connection:
+      type: object
+      required: [id, name, sourceId, destinationId, enabled, filter, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        sourceId: { type: string, format: uuid }
+        destinationId: { type: string, format: uuid }
+        enabled: { type: boolean }
+        filter: { $ref: '#/components/schemas/Filter' }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    ConnectionCreate:
+      type: object
+      required: [name, sourceId, destinationId]
+      additionalProperties: false
+      properties:
+        name: { type: string, minLength: 1, maxLength: 100 }
+        sourceId: { type: string, format: uuid }
+        destinationId: { type: string, format: uuid }
+        enabled: { type: boolean, default: true }
+        filter: { $ref: '#/components/schemas/Filter' }
+    ConnectionUpdate:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        name: { type: string, minLength: 1, maxLength: 100 }
+        enabled: { type: boolean }
+        filter: { $ref: '#/components/schemas/Filter' }
+
+    Event:
+      type: object
+      required: [id, sourceId, status, externalEventId, contentType, bodyBytes, deliveryCount, filteredCount, failureReason, receivedAt, fannedOutAt]
+      properties:
+        id: { type: string, format: uuid }
+        sourceId: { type: string, format: uuid }
+        status: { $ref: '#/components/schemas/EventStatus' }
+        externalEventId: { type: [string, 'null'] }
+        contentType: { type: string }
+        bodyBytes: { type: integer }
+        deliveryCount: { type: integer }
+        filteredCount: { type: integer, description: Connections whose filter did not match. }
+        failureReason: { type: [string, 'null'] }
+        receivedAt: { type: string, format: date-time }
+        fannedOutAt: { type: [string, 'null'], format: date-time }
+    EventDetail:
+      allOf:
+        - $ref: '#/components/schemas/Event'
+        - type: object
+          required: [headers, query, body, deliveries]
+          properties:
+            headers: { type: object, additionalProperties: { type: string } }
+            query: { type: object, additionalProperties: true }
+            body: { type: string, description: The request body exactly as received. }
+            deliveries: { type: array, items: { $ref: '#/components/schemas/Delivery' } }
+
+    Delivery:
+      type: object
+      required: [id, eventId, connectionId, destinationId, status, trigger, replayOfId, attemptCount, maxAttempts, nextAttemptAt, lastAttemptAt, lastStatusCode, lastErrorCode, deadReason, completedAt, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        eventId: { type: string, format: uuid }
+        connectionId: { type: [string, 'null'], format: uuid }
+        destinationId: { type: string, format: uuid }
+        status: { $ref: '#/components/schemas/DeliveryStatus' }
+        trigger: { $ref: '#/components/schemas/DeliveryTrigger' }
+        replayOfId: { type: [string, 'null'], format: uuid }
+        attemptCount: { type: integer }
+        maxAttempts: { type: integer }
+        nextAttemptAt: { type: [string, 'null'], format: date-time }
+        lastAttemptAt: { type: [string, 'null'], format: date-time }
+        lastStatusCode: { type: [integer, 'null'] }
+        lastErrorCode: { type: [string, 'null'] }
+        deadReason: { type: [string, 'null'], enum: [RETRIES_EXHAUSTED, PERMANENT_FAILURE, STALLED, null] }
+        completedAt: { type: [string, 'null'], format: date-time }
+        createdAt: { type: string, format: date-time }
+    DeliveryDetail:
+      allOf:
+        - $ref: '#/components/schemas/Delivery'
+        - type: object
+          required: [attempts]
+          properties:
+            attempts: { type: array, items: { $ref: '#/components/schemas/DeliveryAttempt' } }
+
+    DeliveryAttempt:
+      type: object
+      required: [id, deliveryId, attemptNumber, outcome, statusCode, errorCode, errorMessage, startedAt, durationMs, retryAfterMs, resolvedIp, requestHeaders, responseHeaders, responseBody, responseBodyTruncated]
+      properties:
+        id: { type: string, format: uuid }
+        deliveryId: { type: string, format: uuid }
+        attemptNumber: { type: integer, minimum: 1 }
+        outcome: { $ref: '#/components/schemas/AttemptOutcome' }
+        statusCode: { type: [integer, 'null'] }
+        errorCode:
+          type: [string, 'null']
+          enum: [TIMEOUT, NETWORK_ERROR, DNS_ERROR, TLS_ERROR, SSRF_BLOCKED, REDIRECT_NOT_FOLLOWED, HTTP_ERROR, null]
+        errorMessage: { type: [string, 'null'] }
+        startedAt: { type: string, format: date-time }
+        durationMs: { type: integer }
+        retryAfterMs: { type: [integer, 'null'] }
+        resolvedIp: { type: [string, 'null'] }
+        requestHeaders: { type: object, additionalProperties: { type: string } }
+        responseHeaders: { type: [object, 'null'], additionalProperties: { type: string } }
+        responseBody: { type: [string, 'null'] }
+        responseBodyTruncated: { type: boolean }
+
+    BulkReplayResponse:
+      type: object
+      required: [replayedCount, hasMore]
+      properties:
+        replayedCount: { type: integer }
+        hasMore: { type: boolean, description: True when more DEAD deliveries remain. Call again. }
+
+    MetricsWindow:
+      type: object
+      required: [from, to]
+      properties:
+        from: { type: string, format: date-time }
+        to: { type: string, format: date-time }
+    Percentiles:
+      type: object
+      required: [p50, p95]
+      properties:
+        p50: { type: [number, 'null'] }
+        p95: { type: [number, 'null'] }
+    MetricsSummary:
+      type: object
+      required: [window, eventsReceived, deliveries, successRate, attemptLatencyMs, endToEndLatencyMs]
+      properties:
+        window: { $ref: '#/components/schemas/MetricsWindow' }
+        eventsReceived: { type: integer }
+        deliveries:
+          type: object
+          required: [succeeded, dead, pending, retrying]
+          properties:
+            succeeded: { type: integer, description: Completed in the window. }
+            dead: { type: integer, description: Completed in the window. }
+            pending: { type: integer, description: 'Current count, not windowed.' }
+            retrying: { type: integer, description: 'Current count, not windowed.' }
+        successRate:
+          type: [number, 'null']
+          description: succeeded / (succeeded + dead). Null when nothing completed in the window.
+        attemptLatencyMs: { $ref: '#/components/schemas/Percentiles' }
+        endToEndLatencyMs: { $ref: '#/components/schemas/Percentiles' }
+    MetricsTimeseries:
+      type: object
+      required: [window, bucketSeconds, points]
+      properties:
+        window: { $ref: '#/components/schemas/MetricsWindow' }
+        bucketSeconds: { type: integer }
+        points:
+          type: array
+          items:
+            type: object
+            required: [bucket, succeeded, dead]
+            properties:
+              bucket: { type: string, format: date-time }
+              succeeded: { type: integer }
+              dead: { type: integer }
+
+    Readiness:
+      type: object
+      required: [status, checks]
+      properties:
+        status: { type: string, enum: [ok, unavailable] }
+        checks:
+          type: object
+          required: [postgres, redis]
+          properties:
+            postgres: { type: string, enum: [ok, fail] }
+            redis: { type: string, enum: [ok, fail] }
