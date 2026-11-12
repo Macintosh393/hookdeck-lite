@@ -1,0 +1,19 @@
+node_modules/
+dist/
+coverage/
+.turbo/
+*.tsbuildinfo
+
+# Local configuration. `.env.example` and `.env.test` are committed; they hold no real secrets.
+.env
+.env.local
+.env.demo
+
+# Prisma generates the client from the schema (pnpm db:generate).
+packages/database/src/generated/
+
+# Written by scripts/send-webhook.ts so `--same-id` can repeat the last webhook id.
+.send-webhook-last-id
+
+.DS_Store
+Thumbs.db

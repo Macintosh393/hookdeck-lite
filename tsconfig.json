@@ -1,0 +1,8 @@
+{
+  // Covers the root-level scripts/ folder. Each workspace has its own tsconfig.json.
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true
+  },
+  "include": ["scripts"]
+}

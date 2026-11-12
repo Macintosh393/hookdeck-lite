@@ -1,0 +1,10 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    // Browser-safe package: no Node types, so an accidental use of `process` or `Buffer` fails typecheck.
+    "lib": ["ES2023", "DOM"],
+    "types": [],
+    "noEmit": true
+  },
+  "include": ["src", "vitest.config.ts"]
+}

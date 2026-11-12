@@ -1,0 +1,7 @@
+{
+  "name": "@hdl/worker",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Plain TypeScript + BullMQ: fan-out, delivery, sweeper. Built on Day 2 (docs/PLAN.md).",
+  "type": "module"
+}
