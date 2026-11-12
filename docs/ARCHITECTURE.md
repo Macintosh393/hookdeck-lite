@@ -99,11 +99,15 @@ flowchart LR
 | Package | May import | Must not import |
 |---|---|---|
 | `packages/shared` | `zod` only | anything Node-only, `core`, `database` |
-| `packages/database` | Prisma, `pg` | `core`, apps |
+| `packages/database` | Prisma, `pg` | `core` ¹, apps |
 | `packages/core` | `shared`, `bullmq`, `ioredis`, `undici`, `ipaddr.js`, `pino` | `database`, apps |
 | `apps/api` | `shared`, `database`, `core` | `apps/worker` |
 | `apps/worker` | `shared`, `database`, `core` | `apps/api`, NestJS |
 | `apps/web` | `shared` | `database`, `core` |
+
+¹ The rule covers the library code in `packages/database/src`. The seed script (`prisma/seed.ts`) is an
+entry point, not library code, and imports `core` to encrypt the secrets it stores:
+[ADR-0018](adr/0018-seed-script-imports-core.md).
 
 Why the split looks like this: [ADR-0002](adr/0002-service-split.md).
 
