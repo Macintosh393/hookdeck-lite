@@ -12,6 +12,8 @@ if (existsSync(envFile)) process.loadEnvFile(envFile);
 export default defineConfig({
   test: {
     include: ['test/**/*.int.test.ts'],
+    // Checks that Postgres and Redis answer and applies migrations to the test database, once.
+    globalSetup: ['test/global-setup.ts'],
     testTimeout: 20_000,
     hookTimeout: 30_000,
   },

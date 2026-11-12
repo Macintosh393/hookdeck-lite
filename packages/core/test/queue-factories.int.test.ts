@@ -95,8 +95,6 @@ describe('queue factories when Redis is unreachable', () => {
     const { logger } = captureLogger();
     const connection = createApiProducerConnection(await closedPortRedisUrl(), logger);
     const queue = createFanoutQueue({ connection, prefix, skipWaitingForReady: true });
-    // BullMQ reports connection problems on the queue too; without a listener they would be unhandled.
-    queue.on('error', () => {});
 
     const startedAt = Date.now();
     await expect(

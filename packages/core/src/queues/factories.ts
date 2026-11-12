@@ -41,20 +41,36 @@ export function buildDeliveryJobOptions(maxAttempts: number): JobsOptions {
   };
 }
 
+/**
+ * BullMQ repeats its connection's `error` events on the queue object. An `error` event that
+ * nobody listens to crashes a Node process, so every queue gets a listener. It does nothing:
+ * redis.ts already logs the connection's state changes, once.
+ */
+function ignoreConnectionErrors<T extends { on(event: 'error', listener: () => void): unknown }>(
+  queue: T,
+): T {
+  queue.on('error', () => {});
+  return queue;
+}
+
 export function createFanoutQueue(options: QueueFactoryOptions): FanoutQueue {
-  return new Queue<FanoutJobData, void, typeof JOB_FANOUT_EVENT>(QUEUE_FANOUT, {
-    connection: options.connection,
-    prefix: options.prefix,
-    skipWaitingForReady: options.skipWaitingForReady ?? false,
-  });
+  return ignoreConnectionErrors(
+    new Queue<FanoutJobData, void, typeof JOB_FANOUT_EVENT>(QUEUE_FANOUT, {
+      connection: options.connection,
+      prefix: options.prefix,
+      skipWaitingForReady: options.skipWaitingForReady ?? false,
+    }),
+  );
 }
 
 export function createDeliveryQueue(options: QueueFactoryOptions): DeliveryQueue {
-  return new Queue<DeliveryJobData, void, typeof JOB_DELIVERY_ATTEMPT>(QUEUE_DELIVERY, {
-    connection: options.connection,
-    prefix: options.prefix,
-    skipWaitingForReady: options.skipWaitingForReady ?? false,
-  });
+  return ignoreConnectionErrors(
+    new Queue<DeliveryJobData, void, typeof JOB_DELIVERY_ATTEMPT>(QUEUE_DELIVERY, {
+      connection: options.connection,
+      prefix: options.prefix,
+      skipWaitingForReady: options.skipWaitingForReady ?? false,
+    }),
+  );
 }
 
 /** Adds the job that turns one Event into Deliveries. Safe to call more than once per event. */

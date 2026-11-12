@@ -155,6 +155,13 @@ Three things make the API producer fail fast, and all three are needed:
   connection's `ready` event, which never comes while Redis is down, so the call would hang before ioredis
   ever sees a command.
 
+A fourth rule follows from how BullMQ starts up. A new `Queue` sends one command (`INFO`, to read the
+Redis version) as soon as it is constructed. If that command fails, the Queue never becomes ready and
+every later `add()` waits forever, even after Redis is back. So **the API creates its Queue only once the
+connection is `ready`**, and creates it again if that first command still fails
+(`apps/api/src/infrastructure/fanout-producer.ts`). Until then an enqueue fails immediately, which is the
+same outcome as any other Redis outage: the Event stays `RECEIVED` and the sweeper enqueues it.
+
 As a last line of defence the API also wraps each of its Redis calls (rate limit, enqueue, publish, the
 `/ready` ping) in a timeout, for the case where Redis accepts the connection but does not answer.
 The factories are in `packages/core/src/redis.ts` and `packages/core/src/queues/factories.ts`.
