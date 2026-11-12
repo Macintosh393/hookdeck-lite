@@ -1,0 +1,17 @@
+# Keeps the Docker build context small and keeps local secrets out of images.
+.git
+**/node_modules
+**/dist
+**/coverage
+**/.turbo
+**/*.tsbuildinfo
+packages/database/src/generated
+
+# Local configuration must never be copied into an image.
+.env
+.env.*
+!.env.example
+.send-webhook-last-id
+
+docs
+prompts
