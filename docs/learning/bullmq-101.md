@@ -2,7 +2,7 @@
 
 For a TypeScript developer who has not used a job queue before. BullMQ is a queue library for Node.js
 that stores everything in Redis. This document covers what this project uses, checked against
-`bullmq@6.7.5` on 2026-11-12. Most tutorials online target v4 or v5; where v6 differs, it is noted.
+`bullmq@6.7.x` on 2026-11-12. Most tutorials online target v4 or v5; where v6 differs, it is noted.
 
 ## Why a queue at all
 

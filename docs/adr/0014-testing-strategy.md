@@ -45,9 +45,8 @@ Details and coverage targets: [TESTING.md](../TESTING.md).
 - Tests share one Postgres and one Redis, so they must isolate by data: unique tenants per test, a unique
   BullMQ prefix per file, and cleanup in `afterAll`.
 - CI and local runs use the same test code and differ only in environment variables.
-- NestJS relies on `emitDecoratorMetadata`, which Vitest's default transform does not emit. The API's
-  Vitest config needs the SWC plugin, or explicit `@Inject()` tokens. `UNVERIFIED` for Vitest 5 with
-  NestJS 12; Day 1 settles it by checking what `nest new` generates for an ESM project.
+- NestJS relies on `emitDecoratorMetadata`. Checked on Day 1: Vitest 5.1 on Vite 8 emits it from the
+  tsconfig option, so no SWC plugin is needed. `apps/api/src/di-metadata.test.ts` guards this.
 - No browser automation: dashboard regressions are caught by hand.
 
 ## What I should be able to explain

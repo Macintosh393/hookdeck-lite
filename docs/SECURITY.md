@@ -63,8 +63,14 @@ ingest(@Req() req: RawBodyRequest<FastifyRequest>) {
 
 - `rawBody` only works with Nest's built-in body parser enabled. Do not pass `bodyParser: false`.
 - Only `application/json` is accepted on the ingestion route. Anything else is `415`.
-- The raw bytes must be valid UTF-8 (`new TextDecoder('utf-8', { fatal: true })`), otherwise `400`. This
-  guarantees `Event.body` (text) round-trips to the same bytes when we forward and sign it.
+- The raw bytes must be valid UTF-8 (`new TextDecoder('utf-8', { fatal: true, ignoreBOM: true })`),
+  otherwise `400`. This guarantees `Event.body` (text) round-trips to the same bytes when we forward and
+  sign it. `ignoreBOM: true` keeps a leading byte-order mark instead of silently dropping it.
+- Fastify answers `415` by itself for types it has no parser for. It does have parsers for `text/plain`
+  and form bodies, so the controller checks the content type as well.
+- Known limitation: Fastify's JSON parser refuses a body with a `__proto__` key, or a
+  `constructor.prototype` key, at any depth (`onProtoPoisoning: 'error'`, its default). Such a webhook
+  gets `400 VALIDATION_ERROR`. The default is kept: it is a safe one, and no provider sends such keys.
 
 ### Modes
 
@@ -110,6 +116,8 @@ GitHub-style signing is `generic-hmac` with `signatureHeader: "x-hub-signature-2
 - The check order (timestamp, then HMAC) matches the Standard Webhooks reference library.
 - Compare decoded bytes, not strings. `timingSafeEqual` throws on unequal lengths, hence the length check first.
 - The `401` body never says which step failed. The log line does, without the signature value.
+- A source whose stored secret cannot be decrypted (tampered ciphertext, wrong master key) is a server
+  fault, not a bad request: the answer is `500 INTERNAL` and nothing is stored.
 - `standard-webhooks` accepts several signatures in one header (space-separated). That is how providers
   rotate keys without downtime. Entries with a version other than `v1` are ignored.
 - The reference library uses `parseInt`, which accepts `"123abc"`. We are stricter.

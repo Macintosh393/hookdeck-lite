@@ -95,5 +95,30 @@ during implementation, and the questions the lead should be able to answer about
 
 ## Commands
 
-Placeholder. The Day 1 scaffold session replaces this section with the real commands
-(install, dev, typecheck, lint, test, test:integration, db:migrate, db:seed, compose up/down).
+Run everything from the repository root. All of them work the same in PowerShell and in CI.
+
+| Command | What it does |
+|---|---|
+| `pnpm install` | Install every workspace. Versions come from the catalog in `pnpm-workspace.yaml` |
+| `pnpm setup:env` | First time only: create `.env` from `.env.example` with a fresh `SECRETS_MASTER_KEY` |
+| `docker compose up -d` | Start Postgres, Redis and the mock receiver (port 4000). `docker compose up -d postgres redis` is enough for the tests |
+| `docker compose down` | Stop them. Add `-v` to also delete the Postgres data |
+| `pnpm db:generate` | Generate the Prisma client into `packages/database/src/generated` (also runs before build, test and dev) |
+| `pnpm db:migrate` | Apply pending migrations (`prisma migrate deploy`; never prompts) |
+| `pnpm db:migrate:dev` | Create a new migration after editing `schema.prisma` (`prisma migrate dev`; interactive) |
+| `pnpm db:seed` | Create the demo tenant, source, destination, connection and API key. Safe to run again |
+| `pnpm db:studio` | Open Prisma Studio to look at the tables |
+| `pnpm dev` | Build the packages in watch mode and run the api with reload on `http://localhost:3001` |
+| `pnpm build` | Compile every workspace to `dist/` |
+| `pnpm typecheck` | `tsc --noEmit` in every workspace |
+| `pnpm lint` | ESLint in every workspace, including the package-boundary rules |
+| `pnpm test` | Unit tests. No Postgres or Redis needed |
+| `pnpm test:integration` | Integration tests against the real Postgres and Redis (uses `.env.test`: database `hookdeck_test`, Redis index 1) |
+| `pnpm send-webhook` | Sign and post a sample webhook to the running api. Flags: `--same-id`, `--bad-signature`, `--source <slug>`, `--url <base>`, `--secret <whsec>` |
+| `pnpm format` / `pnpm format:check` | Prettier |
+
+One workspace only: `pnpm turbo run test --filter=@hdl/core`. One test file:
+`pnpm --filter @hdl/api exec vitest run --config vitest.integration.config.ts test/ingest.int.test.ts`.
+
+Adding a dependency: put the version in the `catalog:` of `pnpm-workspace.yaml`, refer to it as
+`"catalog:"` in the workspace's `package.json`, then `pnpm install`.

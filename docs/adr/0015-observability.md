@@ -53,8 +53,10 @@ header, and includes it in error bodies.
   Platform health checks must point at `/health`, not `/ready`, or a Redis outage would take ingestion offline.
 - No distributed tracing, no metrics endpoint, no alerting. Acceptable for this scope.
 - Discipline is needed: a log line without the ids is a defect. Review checks for it.
-- Whether to use `nestjs-pino` or Fastify's built-in pino logger is an implementation detail;
-  `nestjs-pino` compatibility with NestJS 12 is `UNVERIFIED`.
+- Whether to use `nestjs-pino` or Fastify's built-in pino logger is an implementation detail.
+  Settled on Day 1: Fastify's built-in logger (`loggerInstance`), plus a small `LoggerService` adapter
+  for NestJS's own lines. `nestjs-pino` 5.3.1 is compatible with NestJS 12 but keeps one process-wide
+  `pino-http` instance, which does not fit tests that build several apps.
 
 ## What I should be able to explain
 

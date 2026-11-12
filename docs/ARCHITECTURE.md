@@ -233,7 +233,12 @@ Notes:
 
 - Redis failures on steps 8, 13, and 14 never fail the request. Each Redis call from the API fails fast
   (no offline queue, one retry) so a Redis outage does not turn into slow responses.
-- The only step that can turn a valid request into an error is the Postgres insert (`503`).
+- The only step that can turn a valid request into an error is Postgres: the source lookup on a cache
+  miss, or the insert. Both answer `503`.
+- The source cache has a 30 s TTL and holds the decrypted secret. Disabling a source, or changing its
+  secret or its tenant's rate limit, takes up to 30 s to reach ingestion. Unknown slugs are not cached.
+- Request logging is Fastify's built-in pino logger: one `incoming request` and one `request completed`
+  line per request with method, url, status code and `requestId`. Headers and bodies are never logged.
 
 ### 2. Fan-out and filter evaluation
 

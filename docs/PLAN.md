@@ -91,7 +91,7 @@ pnpm setup:env                        (first time only: creates .env with a new 
 docker compose up -d
 pnpm db:migrate
 pnpm db:seed
-pnpm dev
+pnpm dev                              (leave it running; use a second terminal for the rest)
 pnpm send-webhook                     -> 202 {"id": "...", "status": "accepted"}
 pnpm send-webhook --same-id           -> 202 {"status": "duplicate"}
 pnpm send-webhook --bad-signature     -> 401 INVALID_SIGNATURE
@@ -516,3 +516,15 @@ it is used. The session for the listed day resolves it and records the answer in
 | U10 | `undici@8` `Agent` `connect.lookup` option shape (else `node:https` `lookup`) | 2 | undici types; SEC-SSRF-07 |
 | U11 | Whether `autocannon` reports p95 (else record p97.5) | 4 | Its result object |
 | U12 | Render prices, the Postgres major it provisions, and SSE connection behaviour | 4 | Render pricing and docs; the deployed service |
+
+### Results
+
+| # | Resolved | Result |
+|---|---|---|
+| U1 | Day 1 | `allowBuilds:` in `pnpm-workspace.yaml`, a map of package to true or false. `strictDepBuilds` is on by default, so an unlisted build script fails the install |
+| U2 | Day 1 | No SWC plugin. Vitest 5.1 on Vite 8 emits decorator metadata from `emitDecoratorMetadata`. Guard: `apps/api/src/di-metadata.test.ts` |
+| U3 | Day 1 | `nestjs-pino@5.3.1` installs and boots on NestJS 12, but was not adopted: the api uses Fastify's built-in pino logger. Reasons in the Day 1 learning-log entry |
+| U4 | Day 1 | `prisma init` 7.10.1 writes `prisma7.config.ts`; the client is imported from `./generated/prisma/client.js` |
+| U5 | Day 1 | All three image tags exist |
+| U6 | Day 1 | BullMQ 6 works on ioredis 6.0.0. Guard: `packages/core/test/bullmq-ioredis.int.test.ts` |
+| U7 | Day 1 | TypeScript 6.0.3, pinned `~6.0.3` |
