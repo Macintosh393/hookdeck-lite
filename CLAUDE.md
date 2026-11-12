@@ -67,6 +67,22 @@ during implementation, and the questions the lead should be able to answer about
 5. `LEARN:` comments are in place for every new concept the change relies on.
 6. Nothing is reported as done that was not run. If a check was skipped or failed, say so.
 
+## The finish rule
+
+**Do not stop until the task is done.** A session's task is everything its prompt lists, in order.
+
+- Work through every numbered task and every phase ([docs/PLAN.md](docs/PLAN.md)) without pausing for
+  confirmation in between. Finishing one task or one phase is not a reason to stop; start the next one.
+- An ordinary obstacle (a failing test, a type error, an API that differs from the docs, a tool that
+  errors) is not a reason to stop either. Diagnose it, fix it, and carry on. Record what you found.
+- Done means the [definition of done](#definition-of-done-per-task) holds for every task and the report
+  the prompt asks for is written. "Most of it works" is not done.
+- Stop early only when: a doc is wrong in a way that changes a decision, something is impossible,
+  or the next step is destructive, paid, or outward-facing (deleting data, creating paid resources,
+  pushing, deploying). Then say exactly what blocks you and what you need.
+- If a session must end before the task is done, it first writes a handoff prompt in `prompts/`:
+  where it stopped, what is committed, what is left, and every decision the next session must keep.
+
 ## Conventions
 
 - TypeScript strict mode, ESM everywhere (`"type": "module"`).
