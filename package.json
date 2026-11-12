@@ -17,6 +17,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "setup:env": "tsx scripts/setup-env.ts",
+    "send-webhook": "tsx scripts/send-webhook.ts",
     "db:generate": "turbo run db:generate",
     "db:migrate": "turbo run db:migrate",
     "db:migrate:dev": "pnpm --filter @hdl/database run db:migrate:dev",
