@@ -28,7 +28,11 @@ function createConnection(url: string, options: RedisOptions, logger: Logger, ro
     isUp = false;
   });
   connection.on('close', () => {
-    if (isUp === true) logger.warn({ redisRole: role }, 'Redis connection closed; reconnecting');
+    // `end` means we closed it ourselves (quit() or disconnect() at shutdown): ioredis will not
+    // reconnect, and a warning after "stopped" would only mislead.
+    if (isUp === true && connection.status !== 'end') {
+      logger.warn({ redisRole: role }, 'Redis connection closed; reconnecting');
+    }
     isUp = false;
   });
 

@@ -23,6 +23,7 @@ Template: [0000-template.md](0000-template.md). The rule for when to write one i
 | [0016](0016-deployment.md) | Deploy on Render and Vercel, CI on GitHub Actions | Accepted, with an open cost question |
 | [0017](0017-toolchain-versions.md) | Toolchain versions and pins | Proposed |
 | [0018](0018-seed-script-imports-core.md) | The seed script may import `@hdl/core` | Accepted |
+| [0019](0019-pin-ipv4-first.md) | Pin the IPv4 address of a dual-stack destination | Proposed |
 
 `Proposed` means the human lead has not confirmed it yet. See
 [PLAN.md](../PLAN.md#open-questions-for-the-human-lead).

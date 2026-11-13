@@ -192,6 +192,31 @@ describe('resolveTarget', () => {
     );
   });
 
+  it('pins the IPv4 address of a dual-stack host, whatever order DNS answers in (ADR-0019)', async () => {
+    const publicV6 = { address: '2606:2800:220:1::1', family: 6 } as const;
+
+    const v6First = await resolveTarget('http://dual.example/', {
+      allowlist: [],
+      resolver: stubResolver([publicV6, PUBLIC_V4]),
+    });
+    expect(v6First).toMatchObject({ address: PUBLIC_V4.address, family: 4 });
+
+    // A host with only AAAA records is still reachable: the first address is used.
+    const v6Only = await resolveTarget('http://v6.example/', {
+      allowlist: [],
+      resolver: stubResolver([publicV6]),
+    });
+    expect(v6Only).toMatchObject({ address: publicV6.address, family: 6 });
+
+    // Preferring IPv4 does not weaken the check: a blocked AAAA record still rejects the host.
+    await expect(
+      resolveTarget('http://dual.example/', {
+        allowlist: [],
+        resolver: stubResolver([{ address: 'fd00::1', family: 6 }, PUBLIC_V4]),
+      }),
+    ).rejects.toThrow(SsrfBlockedError);
+  });
+
   it('passes a DNS failure through, so the caller can tell it from a blocked address', async () => {
     const dnsFailure = Object.assign(new Error('getaddrinfo ENOTFOUND nope.invalid'), {
       code: 'ENOTFOUND',

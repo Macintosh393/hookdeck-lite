@@ -234,7 +234,8 @@ Implemented with `undici@8` (verified on Day 2, U10) in `packages/core/src/ssrf/
 
 - `resolve-target.ts` applies rules 1–4 and 9 **before** any socket exists: it parses the URL, resolves
   the hostname once (or takes an IP literal as it is, because Node never calls `lookup` for a literal),
-  checks every address, and returns the one address to use.
+  checks every address, and returns the one address to use: the first IPv4 address, or the first
+  address if there is none ([ADR-0019](adr/0019-pin-ipv4-first.md)).
 - `safe-http-client.ts` then creates one `undici` `Agent` for the request with
   `connect: { lookup }`, where `lookup` answers with that checked address and never queries DNS.
   That is the pin (rule 5). `lookup` has the signature of `dns.lookup`, including the `all: true` form.

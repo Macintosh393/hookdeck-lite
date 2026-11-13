@@ -116,7 +116,14 @@ export async function resolveTarget(
     }
   }
 
-  return { url, hostname, address: first.address, family: first.family, allowlisted };
+  // Pinning means one address, so there is no "try IPv6, fall back to IPv4" as a browser does.
+  // Prefer IPv4: a host that publishes both records is far more often unreachable over IPv6
+  // (no route from this network, or a server bound to 127.0.0.1 while `localhost` resolves to
+  // ::1 first) than over IPv4. Every address was checked above, so the choice is only about
+  // reachability. See docs/adr/0019-pin-ipv4-first.md
+  const pinned = candidates.find((candidate) => candidate.family === 4) ?? first;
+
+  return { url, hostname, address: pinned.address, family: pinned.family, allowlisted };
 }
 
 export type DestinationUrlCheck = { ok: true } | { ok: false; reason: string };
