@@ -18,7 +18,7 @@
     "start": "node dist/main.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint .",
-    "test": "vitest run --passWithNoTests",
+    "test": "vitest run",
     "start:watch": "tsx watch src/main.ts"
   },
   "devDependencies": {
@@ -27,5 +27,8 @@
     "typescript": "catalog:",
     "vite": "catalog:",
     "vitest": "catalog:"
+  },
+  "dependencies": {
+    "standardwebhooks": "catalog:"
   }
 }
