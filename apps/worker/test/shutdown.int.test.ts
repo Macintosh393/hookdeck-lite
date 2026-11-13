@@ -171,15 +171,20 @@ describe('worker lifecycle', () => {
         });
         expect(delivery.attemptCount).toBe(2);
 
-        const raw = logs.raw();
         // The cycle was logged at all: otherwise the checks below would pass on an empty log.
-        const lines = logs.lines();
-        expect(lines.map((line) => line.msg)).toContain('Event fanned out');
-        expect(
-          lines.filter(
-            (line) => line.msg === 'Delivery attempt recorded' && line.deliveryId === delivery.id,
-          ),
-        ).toHaveLength(2);
+        // Wait for the lines: the processor logs after it has committed and published, so the
+        // row can say SUCCEEDED a moment before the second "attempt recorded" line exists.
+        await eventually(
+          () =>
+            logs
+              .lines()
+              .filter(
+                (line) =>
+                  line.msg === 'Delivery attempt recorded' && line.deliveryId === delivery.id,
+              ).length === 2,
+        );
+        const raw = logs.raw();
+        expect(logs.lines().map((line) => line.msg)).toContain('Event fanned out');
         // The signing secret, with and without its prefix.
         expect(raw).not.toContain(destination.signingSecret);
         expect(raw).not.toContain(destination.signingSecret.replace('whsec_', ''));
