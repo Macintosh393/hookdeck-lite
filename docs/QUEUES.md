@@ -349,8 +349,9 @@ its event loop is blocked for too long, the lock expires. Any worker's stalled-c
 The `failed` listener has the signature `(job: Job | undefined, error: Error, prev: string)` and fires on
 **every** failed attempt, not only the last. It must act only when the job will not run again:
 `error instanceof UnrecoverableError`, or `job.attemptsMade >= job.opts.attempts`, or the stalled-limit message.
-`UNVERIFIED`: that `failed` fires per attempt is from BullMQ 5 behaviour and the v6 type signature; the
-Day 2 session must confirm it with a test.
+Verified on Day 2 against `bullmq@6.7.4` (U8): `failed` fires once per failed attempt, and an
+`UnrecoverableError` fires it once with `attemptsMade` still below `attempts`.
+Guard: `packages/core/test/bullmq-behaviour.int.test.ts`.
 
 ## Sweeper
 
