@@ -1,0 +1,12 @@
+node_modules
+dist
+coverage
+.turbo
+pnpm-lock.yaml
+packages/database/src/generated
+packages/database/prisma/migrations
+
+# Docs and prompts are hand-wrapped Markdown with wide tables. Prettier would reflow them.
+*.md
+docs
+prompts

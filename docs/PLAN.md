@@ -7,6 +7,12 @@ How to use this plan:
 
 - Start each day by pasting that day's kickoff prompt into a new session. Save the prompt you used in
   `prompts/` (for example `prompts/02-day1-scaffold.md`).
+- Each day is split into **three phases**. A phase is a group of consecutive tasks that ends in a state
+  you can check: all checks green, one commit per task, and the "ends with" line of the phase true.
+  Task numbers run through the whole day, so the kickoff prompts still refer to them.
+- A session works through all three phases of its day without stopping in between
+  ([the rule](../CLAUDE.md#the-finish-rule)). If a session has to end early, it ends at a phase boundary
+  where possible and leaves a handoff prompt in `prompts/` saying where it stopped and what is left.
 - If a day overruns, cut from the [cut list](#cut-list), top first. Do not borrow time from tests.
 - Scope is defined by [PRD.md](PRD.md). Names are defined by [ARCHITECTURE.md](ARCHITECTURE.md#canonical-names).
 
@@ -21,6 +27,11 @@ How to use this plan:
 
 ### Tasks, in order
 
+#### Phase 1 — Foundation (tasks 1–4)
+
+Ends with: `pnpm install`, `typecheck`, `lint`, and `test` green on an empty scaffold; Postgres and
+Redis running from docker-compose; the first migration applied; no Day 1 `UNVERIFIED` item open.
+
 1. **Scaffold the monorepo.** pnpm workspace, Turborepo pipeline (`build`, `typecheck`, `lint`, `test`,
    `test:integration`, `dev`), shared `tsconfig`, ESLint flat config, Prettier, Vitest. Create every
    package and tool folder from [ADR-0002](adr/0002-service-split.md) with a minimal `package.json`.
@@ -33,12 +44,26 @@ How to use this plan:
    client with the `pg` adapter, seed script (demo tenant, API key from `SEED_API_KEY`, one
    `standard-webhooks` source, one destination pointing at the mock receiver, one connection; plus a
    load-test tenant with a very high `ingestRateLimit`).
+   The seed script is written at the end of phase 2, after task 6: it encrypts the secrets it stores,
+   and that code lives in `packages/core`.
+
+#### Phase 2 — Shared logic (tasks 5–6, then the seed from task 4)
+
+Ends with: the filter engine and the security primitives unit-tested, the rate limiter and queue
+factories tested against the real Redis, and `pnpm db:seed` filling the development database.
+
 5. **`packages/shared`**: entity types, Zod schemas for API inputs and `VerificationConfig`,
    `StreamMessage`, and the **filter engine** with every example in
    [FILTER-RULES.md](FILTER-RULES.md#examples) as a test.
 6. **`packages/core`, the parts ingestion needs**: env parsing with Zod, pino logger factory, Redis
    connection factories, queue names and job types, HMAC sign/verify for both modes, secret encryption,
    the rate-limiter Lua script and wrapper. Unit tests for HMAC and encryption.
+
+#### Phase 3 — Ingestion end to end (tasks 7–10)
+
+Ends with: the [demo checkpoint](#demo-checkpoint) below working, every Day 1 acceptance criterion
+checked, and the learning-log entry written.
+
 7. **`tools/mock-receiver`, minimal**: `POST /hook/:bucket` returning a status chosen by query parameter,
    and `GET /health`. The full control API comes on Day 2.
 8. **`apps/api`**: bootstrap (Fastify adapter, `rawBody: true`, body limit, CORS with explicit methods,
@@ -62,10 +87,11 @@ How to use this plan:
 ### Demo checkpoint
 
 ```
+pnpm setup:env                        (first time only: creates .env with a new SECRETS_MASTER_KEY)
 docker compose up -d
 pnpm db:migrate
 pnpm db:seed
-pnpm dev
+pnpm dev                              (leave it running; use a second terminal for the rest)
 pnpm send-webhook                     -> 202 {"id": "...", "status": "accepted"}
 pnpm send-webhook --same-id           -> 202 {"status": "duplicate"}
 pnpm send-webhook --bad-signature     -> 401 INVALID_SIGNATURE
@@ -120,6 +146,11 @@ commands for the Day 1 demo checkpoint.
 
 ### Tasks, in order
 
+#### Phase 1 — Delivery building blocks (tasks 1–3)
+
+Ends with: `packages/core` complete and unit-tested (backoff, classification, `Retry-After`, the
+SSRF-safe client, stream publisher and subscriber), and a mock receiver that can be scripted to fail.
+
 1. **Resolve the Day 2 unverified items** (BullMQ `failed` listener semantics, duplicate `jobId`
    behaviour for finished jobs, undici `connect.lookup`).
 2. **`packages/core`, the rest**: `computeBackoffDelay`, `parseRetryAfter`, `classifyResponse`,
@@ -127,9 +158,21 @@ commands for the Day 1 demo checkpoint.
    Unit tests for all of them.
 3. **`tools/mock-receiver`, full version**: the control API and programmatic interface specified in
    [TESTING.md](TESTING.md#the-mock-receiver).
+
+#### Phase 2 — The worker (task 4)
+
+Ends with: a webhook sent with `pnpm send-webhook` is fanned out, delivered to the mock receiver,
+retried on failure, and marked `DEAD` when retries run out; `Ctrl+C` shuts the worker down cleanly.
+
 4. **`apps/worker`**: `main.ts` wiring (connections, both Workers, sweeper, shutdown), the fan-out
    processor, the delivery processor with outbound signing, the `failed` listeners, the sweeper.
    Follow [QUEUES.md](QUEUES.md) step by step.
+
+#### Phase 3 — Read API, replay, and proof (tasks 5–8)
+
+Ends with: replay working through the API, every `SEC-*` checklist item and every Day 2 acceptance
+criterion covered by a passing test, and the learning-log entry written.
+
 5. **`apps/api`**: `ApiKeyGuard` and `GET /api/v1/whoami`; read endpoints for events and deliveries
    (list, detail, attempts) with cursor pagination; `POST /api/v1/deliveries/{id}/replay`;
    `POST /api/v1/destinations/{id}/replay-dead`.
@@ -207,18 +250,35 @@ the Day 2 demo checkpoint.
 
 ### Tasks, in order
 
+#### Phase 1 — Management API complete (task 1)
+
+Ends with: every endpoint of [openapi.yaml](api/openapi.yaml) implemented and matching the contract,
+including metrics and the SSE stream, with tenant-isolation and stream-isolation tests passing.
+
 1. **`apps/api`, the remaining endpoints**: CRUD for sources, destinations (with create-time SSRF
    validation and secret generation), and connections (with filter validation); rotate-secret;
    `GET /api/v1/metrics/summary` and `/timeseries` using the queries in
    [DATA-MODEL.md](DATA-MODEL.md#dashboard-metrics-queries); `GET /api/v1/stream` (SSE with keep-alive,
    one shared Redis subscriber, reference-counted per tenant). Integration tests for tenant isolation
    and stream isolation.
+
+#### Phase 2 — Dashboard core: see events live (tasks 2–5)
+
+Ends with: after entering the API key, the events list and event detail load, and a new event or
+attempt appears within 2 seconds without a reload.
+
 2. **`apps/web` foundation**: Next.js App Router, Tailwind, TanStack Query, a typed API client built on
    the `shared` schemas, the "enter API key" screen (`whoami`, `sessionStorage`), layout and navigation.
 3. **Events list**: filters by source and status, cursor "load more", live insertion of new events.
 4. **Event detail**: stored request (headers, query, body as text), deliveries, and for each delivery an
    **attempts timeline** with status code, duration, error, request and response details.
 5. **Live stream**: the fetch-based SSE client with reconnect and refetch-on-reconnect; a live activity view.
+
+#### Phase 3 — Dashboard control: replay, metrics, CRUD, filter tester (tasks 6–10)
+
+Ends with: the Day 3 demo checkpoint working in a real browser, and the learning-log entry written.
+This phase holds most of the [cut list](#cut-list) candidates; cut from the top if the day overruns.
+
 6. **Dead-letter view** with single replay and "replay all DEAD for this destination".
 7. **Metrics page**: summary tiles and a deliveries-over-time chart.
 8. **Minimal CRUD** screens for sources, destinations, and connections. Show a destination's signing
@@ -290,18 +350,35 @@ anything not verified in a real browser, and the steps for the Day 3 demo checkp
 
 ### Tasks, in order
 
+#### Phase 1 — Prove it: end-to-end, resilience, coverage (tasks 1–3)
+
+Ends with: both e2e tests and the three resilience tests passing locally, and the coverage
+thresholds of [TESTING.md](TESTING.md#coverage-targets) enforced.
+
 1. **End-to-end tests** (API + worker + Postgres + Redis + mock receiver in one test process or as child
    processes): the happy path, and failure → `DEAD` → replay. Scenarios in
    [TESTING.md](TESTING.md#end-to-end-tests).
 2. **Resilience tests**: worker killed mid-delivery (NFR2), Redis stopped during ingestion (NFR4),
    scaled-down retry schedule bound (NFR3).
 3. **Fill coverage gaps** to the targets in [TESTING.md](TESTING.md#coverage-targets).
+
+#### Phase 2 — Measure and package: load test, Docker, CI (tasks 4–6)
+
+Ends with: the NFR1 numbers measured and written down, the whole system running in containers, and
+a green CI run.
+
 4. **`tools/loadtest`**: the autocannon script under the [NFR1 conditions](PRD.md#nfr1-measurement-conditions).
    Run it, record p50/p95/p99, requests per second, and the machine in the README.
 5. **Dockerfiles** for `api` and `worker` (multi-stage, pruned to one app, non-root user, exec-form
    `CMD`), and a compose profile that runs the whole system in containers.
 6. **GitHub Actions**: install → lint → typecheck → unit tests → integration and e2e tests with Postgres
    and Redis service containers. Cache pnpm and Turborepo.
+
+#### Phase 3 — Ship: deploy, README, final check (tasks 7–9)
+
+Ends with: the public demo answering, the README complete with measured numbers, and the list of
+doc/code mismatches empty or reported. Deployment is cuttable; the README and the final check are not.
+
 7. **Deploy**: `render.yaml` Blueprint (api, worker, Postgres, Key Value with `noeviction`, and the mock
    receiver as a public demo destination), migrations as a pre-deploy command, production env vars
    (`SSRF_ALLOWLIST` empty), then the dashboard on Vercel. Run the smoke test against the deployment.
@@ -439,3 +516,15 @@ it is used. The session for the listed day resolves it and records the answer in
 | U10 | `undici@8` `Agent` `connect.lookup` option shape (else `node:https` `lookup`) | 2 | undici types; SEC-SSRF-07 |
 | U11 | Whether `autocannon` reports p95 (else record p97.5) | 4 | Its result object |
 | U12 | Render prices, the Postgres major it provisions, and SSE connection behaviour | 4 | Render pricing and docs; the deployed service |
+
+### Results
+
+| # | Resolved | Result |
+|---|---|---|
+| U1 | Day 1 | `allowBuilds:` in `pnpm-workspace.yaml`, a map of package to true or false. `strictDepBuilds` is on by default, so an unlisted build script fails the install |
+| U2 | Day 1 | No SWC plugin. Vitest 5.1 on Vite 8 emits decorator metadata from `emitDecoratorMetadata`. Guard: `apps/api/src/di-metadata.test.ts` |
+| U3 | Day 1 | `nestjs-pino@5.3.1` installs and boots on NestJS 12, but was not adopted: the api uses Fastify's built-in pino logger. Reasons in the Day 1 learning-log entry |
+| U4 | Day 1 | `prisma init` 7.10.1 writes `prisma7.config.ts`; the client is imported from `./generated/prisma/client.js` |
+| U5 | Day 1 | All three image tags exist |
+| U6 | Day 1 | BullMQ 6 works on ioredis 6.0.0. Guard: `packages/core/test/bullmq-ioredis.int.test.ts` |
+| U7 | Day 1 | TypeScript 6.0.3, pinned `~6.0.3` |

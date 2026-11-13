@@ -1,0 +1,7 @@
+{
+  "name": "@hdl/web",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Next.js dashboard. Built on Day 3 (docs/PLAN.md).",
+  "type": "module"
+}

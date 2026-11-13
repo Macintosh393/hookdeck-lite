@@ -1,0 +1,3 @@
+# LF everywhere, so signatures computed over fixture files are the same on Windows and Linux.
+# See docs/TESTING.md#cross-platform-rules
+* text=auto eol=lf

@@ -1,0 +1,39 @@
+{
+  "name": "hookdeck-lite",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@12.18.0",
+  "engines": {
+    "node": ">=24.15 <25"
+  },
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev",
+    "typecheck": "turbo run typecheck",
+    "lint": "turbo run lint",
+    "test": "turbo run test",
+    "test:integration": "turbo run test:integration",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "setup:env": "tsx scripts/setup-env.ts",
+    "send-webhook": "tsx scripts/send-webhook.ts",
+    "db:generate": "turbo run db:generate",
+    "db:migrate": "turbo run db:migrate",
+    "db:migrate:dev": "pnpm --filter @hdl/database run db:migrate:dev",
+    "db:seed": "turbo run db:seed",
+    "db:studio": "pnpm --filter @hdl/database run db:studio"
+  },
+  "devDependencies": {
+    "@eslint/js": "catalog:",
+    "@hdl/core": "workspace:*",
+    "@hdl/database": "workspace:*",
+    "@types/node": "catalog:",
+    "eslint": "catalog:",
+    "prettier": "catalog:",
+    "tsx": "catalog:",
+    "turbo": "catalog:",
+    "typescript": "catalog:",
+    "typescript-eslint": "catalog:"
+  }
+}

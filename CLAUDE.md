@@ -67,6 +67,22 @@ during implementation, and the questions the lead should be able to answer about
 5. `LEARN:` comments are in place for every new concept the change relies on.
 6. Nothing is reported as done that was not run. If a check was skipped or failed, say so.
 
+## The finish rule
+
+**Do not stop until the task is done.** A session's task is everything its prompt lists, in order.
+
+- Work through every numbered task and every phase ([docs/PLAN.md](docs/PLAN.md)) without pausing for
+  confirmation in between. Finishing one task or one phase is not a reason to stop; start the next one.
+- An ordinary obstacle (a failing test, a type error, an API that differs from the docs, a tool that
+  errors) is not a reason to stop either. Diagnose it, fix it, and carry on. Record what you found.
+- Done means the [definition of done](#definition-of-done-per-task) holds for every task and the report
+  the prompt asks for is written. "Most of it works" is not done.
+- Stop early only when: a doc is wrong in a way that changes a decision, something is impossible,
+  or the next step is destructive, paid, or outward-facing (deleting data, creating paid resources,
+  pushing, deploying). Then say exactly what blocks you and what you need.
+- If a session must end before the task is done, it first writes a handoff prompt in `prompts/`:
+  where it stopped, what is committed, what is left, and every decision the next session must keep.
+
 ## Conventions
 
 - TypeScript strict mode, ESM everywhere (`"type": "module"`).
@@ -79,5 +95,30 @@ during implementation, and the questions the lead should be able to answer about
 
 ## Commands
 
-Placeholder. The Day 1 scaffold session replaces this section with the real commands
-(install, dev, typecheck, lint, test, test:integration, db:migrate, db:seed, compose up/down).
+Run everything from the repository root. All of them work the same in PowerShell and in CI.
+
+| Command | What it does |
+|---|---|
+| `pnpm install` | Install every workspace. Versions come from the catalog in `pnpm-workspace.yaml` |
+| `pnpm setup:env` | First time only: create `.env` from `.env.example` with a fresh `SECRETS_MASTER_KEY` |
+| `docker compose up -d` | Start Postgres, Redis and the mock receiver (port 4000). `docker compose up -d postgres redis` is enough for the tests |
+| `docker compose down` | Stop them. Add `-v` to also delete the Postgres data |
+| `pnpm db:generate` | Generate the Prisma client into `packages/database/src/generated` (also runs before build, test and dev) |
+| `pnpm db:migrate` | Apply pending migrations (`prisma migrate deploy`; never prompts) |
+| `pnpm db:migrate:dev` | Create a new migration after editing `schema.prisma` (`prisma migrate dev`; interactive) |
+| `pnpm db:seed` | Create the demo tenant, source, destination, connection and API key. Safe to run again |
+| `pnpm db:studio` | Open Prisma Studio to look at the tables |
+| `pnpm dev` | Build the packages in watch mode and run the api with reload on `http://localhost:3001` |
+| `pnpm build` | Compile every workspace to `dist/` |
+| `pnpm typecheck` | `tsc --noEmit` in every workspace |
+| `pnpm lint` | ESLint in every workspace, including the package-boundary rules |
+| `pnpm test` | Unit tests. No Postgres or Redis needed |
+| `pnpm test:integration` | Integration tests against the real Postgres and Redis (uses `.env.test`: database `hookdeck_test`, Redis index 1) |
+| `pnpm send-webhook` | Sign and post a sample webhook to the running api. Flags: `--same-id`, `--bad-signature`, `--source <slug>`, `--url <base>`, `--secret <whsec>` |
+| `pnpm format` / `pnpm format:check` | Prettier |
+
+One workspace only: `pnpm turbo run test --filter=@hdl/core`. One test file:
+`pnpm --filter @hdl/api exec vitest run --config vitest.integration.config.ts test/ingest.int.test.ts`.
+
+Adding a dependency: put the version in the `catalog:` of `pnpm-workspace.yaml`, refer to it as
+`"catalog:"` in the workspace's `package.json`, then `pnpm install`.

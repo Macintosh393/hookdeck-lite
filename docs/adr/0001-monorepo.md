@@ -33,7 +33,7 @@ Layout: `apps/*`, `packages/*`, `tools/*`. Package names are `@hdl/<folder>`.
 - Dockerfiles must build from the repository root and prune to one app (`turbo prune` or a filtered pnpm deploy).
 - `packages/shared` is imported by the browser. It must not import Node-only code; lint enforces this.
 - pnpm blocks dependency build scripts by default. Prisma's must be allowed in `pnpm-workspace.yaml`.
-  The exact key for the pinned pnpm version is `UNVERIFIED` and is checked on Day 1.
+  Checked on Day 1: the key is `allowBuilds`, a map of package name to `true` or `false`.
 
 ## What I should be able to explain
 

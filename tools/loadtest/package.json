@@ -1,0 +1,7 @@
+{
+  "name": "@hdl/loadtest",
+  "version": "0.1.0",
+  "private": true,
+  "description": "autocannon script for ingestion latency (NFR1). Built on Day 4 (docs/PLAN.md).",
+  "type": "module"
+}

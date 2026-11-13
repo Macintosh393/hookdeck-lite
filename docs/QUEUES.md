@@ -4,7 +4,8 @@ How work moves through Redis. BullMQ concepts are explained in [learning/bullmq-
 this document is the spec. Decisions: [ADR-0006](adr/0006-queues-backoff-classification.md),
 [ADR-0007](adr/0007-dead-letter-and-replay.md).
 
-Verified on 2026-11-12 against `bullmq@6.7.5` (type definitions and docs). BullMQ 6 no longer installs
+Verified on 2026-11-12 against `bullmq@6.7.x` (type definitions and docs; the lockfile has 6.7.4, because
+pnpm's release-age gate refused the day-old 6.7.5). BullMQ 6 no longer installs
 `ioredis` for you: `packages/core` depends on both `bullmq` and `ioredis`.
 
 ## Topology
@@ -140,10 +141,30 @@ Why concurrency helps here and when it would not: [concurrency](learning/bullmq-
 
 | Connection | Options | Why |
 |---|---|---|
-| API producer (Queue instances, rate limiter, publisher) | `maxRetriesPerRequest: 1`, `enableOfflineQueue: false` | Fail fast. Ingestion must not hang when Redis is down |
+| API producer (Queue instances, rate limiter, publisher) | `maxRetriesPerRequest: 1`, `enableOfflineQueue: false`; its Queue instances are created with `skipWaitingForReady: true` | Fail fast. Ingestion must not hang when Redis is down |
 | API subscriber (stream) | dedicated connection | A connection in subscriber mode cannot run other commands |
 | Worker (Worker instances) | `maxRetriesPerRequest: null` | Required by BullMQ for workers: blocking commands must retry forever |
 | Worker producer (Queues used by fan-out and sweeper, publisher) | defaults | May wait for Redis; nothing user-facing blocks on it |
+
+Three things make the API producer fail fast, and all three are needed:
+
+- `enableOfflineQueue: false`: ioredis rejects a command issued while disconnected instead of holding it
+  until Redis returns.
+- `maxRetriesPerRequest: 1`: a command that was in flight when the connection dropped is retried once, not 20 times.
+- `skipWaitingForReady: true` (a BullMQ `QueueOptions` flag): without it `queue.add()` first awaits the
+  connection's `ready` event, which never comes while Redis is down, so the call would hang before ioredis
+  ever sees a command.
+
+A fourth rule follows from how BullMQ starts up. A new `Queue` sends one command (`INFO`, to read the
+Redis version) as soon as it is constructed. If that command fails, the Queue never becomes ready and
+every later `add()` waits forever, even after Redis is back. So **the API creates its Queue only once the
+connection is `ready`**, and creates it again if that first command still fails
+(`apps/api/src/infrastructure/fanout-producer.ts`). Until then an enqueue fails immediately, which is the
+same outcome as any other Redis outage: the Event stays `RECEIVED` and the sweeper enqueues it.
+
+As a last line of defence the API also wraps each of its Redis calls (rate limit, enqueue, publish, the
+`/ready` ping) in a timeout, for the case where Redis accepts the connection but does not answer.
+The factories are in `packages/core/src/redis.ts` and `packages/core/src/queues/factories.ts`.
 
 Redis itself must run with `maxmemory-policy noeviction`. With any other policy Redis may delete queue keys
 under memory pressure and jobs vanish. Pitfalls: [bullmq-101](learning/bullmq-101.md#pitfalls).

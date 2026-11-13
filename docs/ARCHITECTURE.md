@@ -99,11 +99,15 @@ flowchart LR
 | Package | May import | Must not import |
 |---|---|---|
 | `packages/shared` | `zod` only | anything Node-only, `core`, `database` |
-| `packages/database` | Prisma, `pg` | `core`, apps |
+| `packages/database` | Prisma, `pg` | `core` ¹, apps |
 | `packages/core` | `shared`, `bullmq`, `ioredis`, `undici`, `ipaddr.js`, `pino` | `database`, apps |
 | `apps/api` | `shared`, `database`, `core` | `apps/worker` |
 | `apps/worker` | `shared`, `database`, `core` | `apps/api`, NestJS |
 | `apps/web` | `shared` | `database`, `core` |
+
+¹ The rule covers the library code in `packages/database/src`. The seed script (`prisma/seed.ts`) is an
+entry point, not library code, and imports `core` to encrypt the secrets it stores:
+[ADR-0018](adr/0018-seed-script-imports-core.md).
 
 Why the split looks like this: [ADR-0002](adr/0002-service-split.md).
 
@@ -229,7 +233,12 @@ Notes:
 
 - Redis failures on steps 8, 13, and 14 never fail the request. Each Redis call from the API fails fast
   (no offline queue, one retry) so a Redis outage does not turn into slow responses.
-- The only step that can turn a valid request into an error is the Postgres insert (`503`).
+- The only step that can turn a valid request into an error is Postgres: the source lookup on a cache
+  miss, or the insert. Both answer `503`.
+- The source cache has a 30 s TTL and holds the decrypted secret. Disabling a source, or changing its
+  secret or its tenant's rate limit, takes up to 30 s to reach ingestion. Unknown slugs are not cached.
+- Request logging is Fastify's built-in pino logger: one `incoming request` and one `request completed`
+  line per request with method, url, status code and `requestId`. Headers and bodies are never logged.
 
 ### 2. Fan-out and filter evaluation
 

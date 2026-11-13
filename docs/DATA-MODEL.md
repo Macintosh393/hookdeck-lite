@@ -366,9 +366,12 @@ model DeliveryAttempt {
 
 Notes for the implementer:
 
-- `prisma.config.ts` sits next to the schema's package root and holds `datasource.url` and
-  `migrations.seed`. Prisma 7 does not load `.env` by itself; the config file imports `dotenv/config`.
-  Prisma 7.10 may name the generated config `prisma7.config.ts`; either name is fine.
+- `prisma7.config.ts` (the name `prisma init` 7.10 generates) sits at the package root and holds
+  `datasource.url` and `migrations.seed`. Prisma 7 does not load `.env` by itself; the config file calls
+  `process.loadEnvFile()` on the repository's root `.env`. No `dotenv` dependency: Node 24 has it built in,
+  and it never overwrites a variable that is already set.
+- The seed (`prisma/seed.ts`) is idempotent: fixed ids, upserts. It imports `@hdl/core` to encrypt the
+  secrets it stores ([ADR-0018](adr/0018-seed-script-imports-core.md)).
 - `migrate dev` no longer runs `generate` or the seed. Scripts call them explicitly.
 - The client needs a driver adapter: `new PrismaClient({ adapter: new PrismaPg({ connectionString }) })`.
 - The request body of an attempt is not stored per attempt. It is always `Event.body`.
