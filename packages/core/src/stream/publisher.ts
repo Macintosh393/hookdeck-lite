@@ -1,6 +1,6 @@
 // Publishes live-stream messages to Redis pub/sub. Pipeline position: the last stage, "stream".
-// The api publishes `event.received`; the worker publishes the rest (Day 2). The subscriber side,
-// which forwards messages to the dashboard over SSE, is built on Day 3. Decision: docs/adr/0011-live-stream.md
+// The api publishes `event.received` and replay's `delivery.created`; the worker publishes the rest.
+// The receiving side is subscriber.ts. Decision: docs/adr/0011-live-stream.md
 import type { StreamMessage } from '@hdl/shared';
 import type { Redis } from 'ioredis';
 import type { Logger } from 'pino';

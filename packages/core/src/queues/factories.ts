@@ -80,3 +80,34 @@ export async function enqueueFanout(queue: FanoutQueue, data: FanoutJobData): Pr
   // It deduplicates enqueues only, not processing. See docs/learning/bullmq-101.md#job-ids
   await queue.add(JOB_FANOUT_EVENT, data, { ...fanoutJobOptions, jobId: data.eventId });
 }
+
+/**
+ * Adds the job that makes the HTTP attempts of one Delivery. Used by the fan-out processor, by
+ * replay in the api, and by the sweeper. The job id is the Delivery id, so all three can add
+ * blindly: BullMQ ignores an add whose id already exists, in any state, until that job is removed.
+ */
+export async function enqueueDelivery(
+  queue: DeliveryQueue,
+  data: DeliveryJobData,
+  maxAttempts: number,
+): Promise<void> {
+  await queue.add(JOB_DELIVERY_ATTEMPT, data, {
+    ...buildDeliveryJobOptions(maxAttempts),
+    jobId: data.deliveryId,
+  });
+}
+
+/** The same for many deliveries in one round trip to Redis (fan-out, bulk replay). */
+export async function enqueueDeliveries(
+  queue: DeliveryQueue,
+  deliveries: ReadonlyArray<{ data: DeliveryJobData; maxAttempts: number }>,
+): Promise<void> {
+  if (deliveries.length === 0) return;
+  await queue.addBulk(
+    deliveries.map(({ data, maxAttempts }) => ({
+      name: JOB_DELIVERY_ATTEMPT,
+      data,
+      opts: { ...buildDeliveryJobOptions(maxAttempts), jobId: data.deliveryId },
+    })),
+  );
+}

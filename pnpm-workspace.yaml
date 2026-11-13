@@ -29,6 +29,9 @@ catalog:
   ioredis: ^6.0.0
   pg: ^8.23.1
   '@types/pg': ^8.23.1
+  # The SSRF-safe HTTP client (docs/SECURITY.md#ssrf-protection).
+  undici: ^8.12.4
+  ipaddr.js: ^2.5.0
   # Prisma: the three packages are pinned to the same exact version.
   # Never install `prisma` without a version: `latest` is a Prisma 8 release candidate.
   prisma: 7.10.1
