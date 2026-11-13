@@ -342,7 +342,7 @@ its event loop is blocked for too long, the lock expires. Any worker's stalled-c
 | Situation | Result |
 |---|---|
 | Job stalls once | Re-run. `attemptsMade` is not increased. A duplicate delivery is possible |
-| Job stalls more than `maxStalledCount` (1) | BullMQ fails it with `job stalled more than allowable limit`, without running the processor |
+| Job stalls more than `maxStalledCount` (1) | BullMQ fails it with `job stalled more than allowable limit`, without running the processor. In 6.7 the stalled check only flags the job and puts it back in the queue; the Worker that takes it next fails it. So the failure needs a running worker, like everything else |
 | That failure for a `delivery` job | The worker's `failed` listener marks the Delivery `DEAD`, `deadReason = STALLED`, if it is not terminal. If the listener cannot write, the sweeper does it later |
 | That failure for a `fanout` job | The `failed` listener marks the Event `FAILED` if it is still `RECEIVED`; otherwise the sweeper does |
 
@@ -395,13 +395,16 @@ on SIGTERM or SIGINT (once):
        Promise.all([fanoutWorker.close(), deliveryWorker.close()]),   // stop fetching, wait for active jobs
        timeout(25 000)
      ])
-  3. if the timeout won: await both workers' close(true)               // force; jobs will be seen as stalled
+  3. if the timeout won: disconnect the Workers' Redis connection      // locks expire; jobs will be seen as stalled
   4. close Queue instances, Redis connections, Prisma
   5. process.exit(0)
 ```
 
 - `worker.close()` stops taking new jobs and resolves when the active ones finish. It has no timeout of
   its own, hence the race.
+- Step 3 does not call `worker.close(true)`: in BullMQ 6.7 a second `close()` returns the promise of the
+  first, so it cannot force anything (found on Day 2). Dropping the connection stops the lock renewals,
+  which is all "force" has to achieve. Test: `apps/worker/test/shutdown.int.test.ts`.
 - 25 s is under the platform's kill deadline (Render sends `SIGTERM`, then `SIGKILL` after 30 s by default).
   It is above `DELIVERY_TIMEOUT_MS` (15 s), so every in-flight attempt can finish and be recorded.
 - **Windows:** `SIGTERM` is never delivered on Windows. `Ctrl+C` sends `SIGINT`, which is why both are
