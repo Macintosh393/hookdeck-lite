@@ -159,8 +159,10 @@ A fourth rule follows from how BullMQ starts up. A new `Queue` sends one command
 Redis version) as soon as it is constructed. If that command fails, the Queue never becomes ready and
 every later `add()` waits forever, even after Redis is back. So **the API creates its Queue only once the
 connection is `ready`**, and creates it again if that first command still fails
-(`apps/api/src/infrastructure/fanout-producer.ts`). Until then an enqueue fails immediately, which is the
-same outcome as any other Redis outage: the Event stays `RECEIVED` and the sweeper enqueues it.
+(`apps/api/src/infrastructure/lazy-queue.ts`, used by the fanout producer and by the delivery producer
+that replay adds jobs through). Until then an enqueue fails immediately, which is the
+same outcome as any other Redis outage: the Event stays `RECEIVED` (or the replayed Delivery stays
+`PENDING`) and the sweeper enqueues it.
 
 As a last line of defence the API also wraps each of its Redis calls (rate limit, enqueue, publish, the
 `/ready` ping) in a timeout, for the case where Redis accepts the connection but does not answer.

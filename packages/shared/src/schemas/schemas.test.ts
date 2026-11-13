@@ -4,11 +4,14 @@ import { describe, expect, it } from 'vitest';
 import {
   connectionCreateSchema,
   connectionUpdateSchema,
+  deliveryListQuerySchema,
   destinationCreateSchema,
   destinationUpdateSchema,
+  eventListQuerySchema,
   listQuerySchema,
   sourceCreateSchema,
   sourceUpdateSchema,
+  validateInput,
 } from './api-inputs.js';
 import { verificationConfigSchema } from './verification-config.js';
 
@@ -243,4 +246,95 @@ describe('listQuerySchema', () => {
       expect(listQuerySchema.safeParse(value).success).toBe(false);
     },
   );
+});
+
+describe('eventListQuerySchema', () => {
+  it('accepts the filters of GET /api/v1/events next to limit and cursor', () => {
+    expect(
+      eventListQuerySchema.parse({
+        limit: '10',
+        sourceId: SOURCE_ID,
+        status: 'FANNED_OUT',
+        from: '2026-11-12T10:00:00Z',
+        to: '2026-11-12T11:00:00.500+02:00',
+      }),
+    ).toEqual({
+      limit: 10,
+      sourceId: SOURCE_ID,
+      status: 'FANNED_OUT',
+      from: '2026-11-12T10:00:00Z',
+      to: '2026-11-12T11:00:00.500+02:00',
+    });
+    expect(eventListQuerySchema.parse({})).toEqual({ limit: 50 });
+  });
+
+  it.each([
+    [{ sourceId: 'not-a-uuid' }, 'sourceId is not a UUID'],
+    [{ status: 'DEAD' }, 'DEAD is a delivery status'],
+    [{ status: ['RECEIVED', 'FAILED'] }, 'one status only'],
+    [{ from: 'yesterday' }, 'not a timestamp'],
+    [{ to: '2026-11-12' }, 'a date without a time'],
+    [{ from: '2026-11-12T10:00:00' }, 'no time zone'],
+    [{ limit: '500' }, 'limit above 100'],
+  ])('rejects %j (%s)', (value, _reason) => {
+    expect(eventListQuerySchema.safeParse(value).success).toBe(false);
+  });
+});
+
+describe('deliveryListQuerySchema', () => {
+  it('accepts the filters of GET /api/v1/deliveries', () => {
+    expect(
+      deliveryListQuerySchema.parse({
+        status: 'DEAD',
+        destinationId: DESTINATION_ID,
+        connectionId: SOURCE_ID,
+        eventId: SOURCE_ID,
+      }),
+    ).toEqual({
+      limit: 50,
+      status: 'DEAD',
+      destinationId: DESTINATION_ID,
+      connectionId: SOURCE_ID,
+      eventId: SOURCE_ID,
+    });
+  });
+
+  it.each([
+    [{ status: 'FANNED_OUT' }, 'FANNED_OUT is an event status'],
+    [{ destinationId: '123' }, 'destinationId is not a UUID'],
+    [{ eventId: '' }, 'empty eventId'],
+  ])('rejects %j (%s)', (value, _reason) => {
+    expect(deliveryListQuerySchema.safeParse(value).success).toBe(false);
+  });
+});
+
+describe('validateInput', () => {
+  it('returns the parsed value, with defaults and coercions applied', () => {
+    expect(validateInput(listQuerySchema, { limit: '5' })).toEqual({
+      ok: true,
+      value: { limit: 5 },
+    });
+  });
+
+  it('reports each problem with the path of the field, as the API error shape wants it', () => {
+    const result = validateInput(eventListQuerySchema, { limit: '0', sourceId: 'x' });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.details.map((detail) => detail.path).sort()).toEqual(['limit', 'sourceId']);
+    for (const detail of result.details) expect(detail.message.length).toBeGreaterThan(0);
+  });
+
+  it('joins nested paths with dots', () => {
+    const result = validateInput(connectionCreateSchema, {
+      name: 'A',
+      sourceId: SOURCE_ID,
+      destinationId: DESTINATION_ID,
+      filter: { body: { type: { $regex: '.*' } } },
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.details[0]?.path.startsWith('filter')).toBe(true);
+  });
 });

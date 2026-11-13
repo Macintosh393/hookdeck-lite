@@ -1,4 +1,4 @@
-// Creates the api's long-lived connections (Postgres, Redis, the fanout queue) once, offers them
+// Creates the api's long-lived connections (Postgres, Redis, the two queues) once, offers them
 // to every module (plain values under the tokens in tokens.ts), and closes them on shutdown.
 import { Global, Inject, Module } from '@nestjs/common';
 import type { DynamicModule, OnApplicationShutdown } from '@nestjs/common';
@@ -12,6 +12,7 @@ import type { Env, Logger, Redis } from '@hdl/core';
 import { createPrismaClient } from '@hdl/database';
 import type { PrismaClient } from '@hdl/database';
 import { ENV, LOGGER, MASTER_KEY, PRISMA, RATE_LIMITER, REDIS } from '../tokens.js';
+import { DeliveryProducer } from './delivery-producer.js';
 import { FanoutProducer } from './fanout-producer.js';
 
 // @Global: the providers are visible to every module without importing this one again.
@@ -22,6 +23,7 @@ export class InfrastructureModule implements OnApplicationShutdown {
     @Inject(PRISMA) private readonly prisma: PrismaClient,
     @Inject(REDIS) private readonly redis: Redis,
     private readonly fanoutProducer: FanoutProducer,
+    private readonly deliveryProducer: DeliveryProducer,
   ) {}
 
   static forRoot(
@@ -54,20 +56,31 @@ export class InfrastructureModule implements OnApplicationShutdown {
           },
         },
         FanoutProducer,
+        DeliveryProducer,
         {
           provide: RATE_LIMITER,
           inject: [REDIS],
           useFactory: (redis: Redis) => createRateLimiter({ redis, logger }),
         },
       ],
-      exports: [ENV, LOGGER, MASTER_KEY, PRISMA, REDIS, RATE_LIMITER, FanoutProducer],
+      exports: [
+        ENV,
+        LOGGER,
+        MASTER_KEY,
+        PRISMA,
+        REDIS,
+        RATE_LIMITER,
+        FanoutProducer,
+        DeliveryProducer,
+      ],
     };
   }
 
   /** Runs on app.close(), and on SIGTERM / SIGINT because createApp enables shutdown hooks. */
   async onApplicationShutdown(): Promise<void> {
-    // The queue shares the Redis connection, so it goes first.
+    // The queues share the Redis connection, so they go first.
     await this.fanoutProducer.close();
+    await this.deliveryProducer.close();
     // disconnect() rather than quit(): quit() sends a command, which fails if Redis is down.
     this.redis.disconnect();
     await this.prisma.$disconnect();
