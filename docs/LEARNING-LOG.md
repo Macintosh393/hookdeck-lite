@@ -210,3 +210,128 @@ Found on the way:
   destination through the API (SEC-ENC-06) is Day 3.
 - During a Redis outage an accepted event stays `RECEIVED` with no job until the Day 2 sweeper exists.
 - The mock receiver has no control API yet (Day 2).
+
+## 2026-11-13 — Worker pipeline, security, replay (Day 2)
+
+### What was built
+
+- **`packages/core`, the rest**: `delivery/backoff.ts` (`computeBackoffDelay`, random source injected),
+  `delivery/retry-after.ts`, `delivery/classify.ts`, `ssrf/address-check.ts` (the CIDR tables),
+  `ssrf/resolve-target.ts` (rules 1–4 and the allowlist), `ssrf/safe-http-client.ts` (undici with a
+  pinned `lookup`), `stream/subscriber.ts`, and `enqueueDelivery` / `enqueueDeliveries`.
+- **`tools/mock-receiver`, full version**: scenarios per bucket, the control API, and the query
+  parameters (`status`, `delayMs`, `retryAfter`, `hang`, `redirectTo`, `bodyBytes`).
+- **`apps/worker`** (plain TypeScript on BullMQ): `worker-app.ts` (connections, both Workers, the
+  backoff strategy, shutdown), `fanout/fanout.processor.ts`, `delivery/delivery.processor.ts`,
+  `delivery/outbound-request.ts` (the signed headers), `failed-listeners.ts`, `sweeper.ts`, `main.ts`
+  (signals only).
+- **`apps/api`, management part one**: `auth/api-key.guard.ts` and `GET /api/v1/whoami`;
+  `events/` and `deliveries/` (lists with cursor pagination, details, attempts);
+  `deliveries/replay.service.ts` (single and bulk replay); `infrastructure/lazy-queue.ts` shared by
+  the fanout and delivery producers; `common/pagination.ts`, `validation.ts`, `serializers.ts`.
+- **Tests**: 647 unit and 223 integration tests in total. Every `SEC-*` id (53) and every Day 2
+  acceptance criterion (30) is in at least one test name.
+
+### Concepts it relied on
+
+- **At-least-once delivery.** The request is sent before the attempt is recorded. A crash in between
+  re-runs the job and the destination gets the event twice, with the same `webhook-id`. The shutdown
+  test shows exactly that duplicate. [delivery guarantees](learning/webhooks-101.md#delivery-guarantees)
+- **Compare-and-set status updates.** Fan-out flips `RECEIVED → FANNED_OUT` with the old status in the
+  `WHERE`; every Delivery update has `status IN (PENDING, RETRYING)`. A second run, the failed listener
+  and the sweeper can all race the processor and exactly one of them writes.
+  [Delivery status](DATA-MODEL.md#delivery-status)
+- **Backoff with full jitter, computed by the processor.** The delay is random in `[0, ceiling)`, with
+  `Retry-After` as a capped floor for `429` and `503`. The processor stores it as `nextAttemptAt` and
+  hands it to BullMQ inside `RetryableDeliveryError`.
+  [backoff and jitter](learning/reliability-patterns.md#backoff-and-jitter), [retries](learning/bullmq-101.md#retries)
+- **Stalled jobs and the two backstops.** A job whose worker died is re-run. One that cannot finish at
+  all ends in BullMQ's failed set without the processor running, so the `failed` listener and the
+  sweeper mark the Delivery `DEAD`. [stalled jobs](learning/bullmq-101.md#stalled-jobs)
+- **The sweeper as a reconciler.** It compares Postgres ("should be in progress") with Redis ("has a
+  job") and repairs the difference. `jobId` deduplication makes it safe to run blindly.
+  [outbox-lite](learning/reliability-patterns.md#outbox-lite), [job IDs](learning/bullmq-101.md#job-ids)
+- **IP pinning.** The hostname is resolved once, every address is checked, and the socket's `lookup`
+  answers with the checked address, so DNS cannot change its answer between check and connect.
+  [IP pinning](learning/ssrf-and-network-security.md#ip-pinning)
+
+### Gotchas found during implementation
+
+Unverified items (the table is also in [PLAN.md](PLAN.md#results)):
+
+- **U8.** The worker's `failed` listener fires after every failed attempt. An `UnrecoverableError`
+  fires it once with `attemptsMade` still below `attempts`, so the listener checks the error type too.
+- **U9.** An `add` with the `jobId` of a completed or failed job is ignored until that job is removed.
+- **U10.** `new Agent({ connect: { lookup } })` works in undici 8.12, including the `all: true` form.
+
+Found on the way:
+
+- **Pinning the first DNS answer broke `localhost` on Windows.** `localhost` resolves to `::1` first,
+  the mock receiver listens on `127.0.0.1`, so every attempt was refused and the delivery went `DEAD`.
+  The same would happen to any destination with A and AAAA records from a network without IPv6. Every
+  address is still checked; the first IPv4 one is pinned. [ADR-0019](adr/0019-pin-ipv4-first.md).
+- **`http://2130706433/` is `127.0.0.1` for the allowlist too.** The URL parser normalises the decimal
+  form before our check, so with `127.0.0.1` on the test allowlist that URL is allowed. Correct, but it
+  means SSRF tests must run with an empty allowlist, as production does.
+- **BullMQ 6.7 fails an over-the-limit stalled job in two steps.** The stalled check flags the job and
+  returns it to the queue; the worker that takes it next fails it with
+  `job stalled more than allowable limit`. Also, `worker.pause()` stops that worker's stalled check.
+  `QUEUES.md` and `bullmq-101.md` were corrected.
+- **`worker.close(true)` after `close()` forces nothing.** It returns the first call's promise. When the
+  25 s timeout wins, shutdown disconnects the Workers' Redis connection instead, so the locks expire.
+  `QUEUES.md` and `bullmq-101.md` were corrected.
+- **A clean shutdown logged "Redis connection closed; reconnecting".** ioredis emits `close` for an
+  intentional `quit()` as well. The connection factory now stays quiet when the status is `end`.
+- **A test raced the log.** The processor logs after it has committed and published, so the row said
+  `SUCCEEDED` before the log line existed. It failed once in three full runs. Tests that read logs
+  wait for the line.
+- **Tests share one database, so an unscoped sweep delivers other files' rows.** `sweepOnce` takes an
+  optional `tenantId`. The worker never sets it; tests always do.
+- **Two clicks on "replay all" would send everything twice.** Both calls read the same `DEAD` rows
+  before either inserted. Bulk replay now locks the destination row (`SELECT … FOR UPDATE`) inside its
+  transaction; the second call waits and then finds nothing left. A test fires three calls at once.
+- **A path id that is not a UUID would reach Postgres and come back as a `500`.** The controllers
+  answer `404` before the query.
+- **`Buffer.from(text, 'base64url')` never throws.** It skips invalid characters, so a cursor is
+  accepted only if it decodes to a UUID and encodes back to the same text.
+
+### Questions I should be able to answer
+
+- **Why is Postgres the attempt counter and not `job.attemptsMade`?** A stall re-runs a job without
+  increasing BullMQ's counter, and a Redis wipe resets it. `Delivery.attemptCount` survives both, so
+  the attempt number, the `x-hdl-attempt` header and "retries exhausted" all come from the row.
+- **What happens if the worker dies right after the HTTP request?** Nothing is recorded, the lock
+  expires, the job is re-run as stalled, and the destination gets a duplicate with the same
+  `webhook-id`. That is what at-least-once means; the receiver deduplicates on the id.
+- **How can the processor, the failed listener and the sweeper all write a final status safely?**
+  Each update carries `WHERE status IN ('PENDING','RETRYING')`. The first one wins; the others match
+  no row and stop. A terminal Delivery is never written again.
+- **How does the system recover from a Redis outage?** Ingestion keeps answering `202` because the
+  Event is in Postgres. Every 15 s the sweeper looks for Events and Deliveries that should have a job
+  and do not, and adds one. Measured in the demo: three webhooks delivered 42.5 s after Redis returned.
+- **Why does replay create a new Delivery instead of resetting the old one?** History stays true (the
+  row that says "DEAD after 5 attempts" keeps saying it), past metrics do not change, and the new job
+  id is new, so BullMQ's "this job id already exists" rule cannot swallow the replay.
+- **Why is the outbound timestamp the send time and not the event time?** Receivers reject timestamps
+  older than about five minutes, and a retry can come hours after the event. The `webhook-id` stays
+  the same on every attempt; the timestamp and signature are new each time.
+
+### Deviations and follow-ups
+
+- ADR written: [ADR-0019](adr/0019-pin-ipv4-first.md), status `Proposed`. It changes which checked
+  address is pinned and needs the lead's confirmation.
+- Checklist items whose HTTP endpoint is Day 3 are tested one level down today, and say so in the test
+  name: `SEC-SSRF-11` and AC9.1 (`validateDestinationUrl`, not the `422`), `SEC-ENC-06` (rows written
+  as the seed writes them, not through `POST /api/v1/destinations`), `SEC-AUTH-04` (every `/api/v1`
+  route that exists; the stream route does not exist yet), `SEC-AUTH-05` (the subscriber, not the SSE
+  endpoint). Day 3 adds the endpoint-level tests.
+- `SEC-LIM-04` is two tests, one per process (worker and api). One test over a full
+  ingest → deliver cycle needs both processes and belongs to the Day 4 end-to-end tests.
+- "`Ctrl+C` during a delivery finishes the attempt" is tested through the exported `shutdown()`
+  that the signal handler calls. A real `Ctrl+C` keypress in a terminal was not automated.
+- The Day 2 demo checkpoint was run against the built api and worker with the demo backoff profile:
+  all six steps passed.
+- Coverage: `core` 91 % lines (unit tests, threshold enforced), `worker` 97 % lines (integration).
+  Thresholds for `worker` and `api` are enforced on Day 4.
+- A `POST` to a replay endpoint with `Content-Type: application/json` and an empty body is answered
+  `400` by Fastify's parser. Send no content type, or `{}`.
