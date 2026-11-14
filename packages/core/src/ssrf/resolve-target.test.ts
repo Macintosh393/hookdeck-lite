@@ -156,7 +156,7 @@ describe('resolveTarget', () => {
     expect(upper.allowlisted).toBe(true);
   });
 
-  it('SEC-SSRF-12 the allowlist skips the address check only: ftp: and credentials are still refused', async () => {
+  it('AC9.4 SEC-SSRF-12 the allowlist skips the address check only: ftp: and credentials are still refused', async () => {
     const options = { allowlist: ['mock-receiver'], resolver: stubResolver([LOOPBACK_V4]) };
 
     await expect(resolveTarget('ftp://mock-receiver/', options)).rejects.toThrow(SsrfBlockedError);
@@ -249,7 +249,7 @@ describe('systemResolver', () => {
 });
 
 describe('validateDestinationUrl (the create-time check behind 422 DESTINATION_URL_NOT_ALLOWED)', () => {
-  it('SEC-SSRF-11 refuses http://169.254.169.254/ (the HTTP endpoint that returns 422 is Day 3)', async () => {
+  it('AC9.1 SEC-SSRF-11 refuses http://169.254.169.254/ (the HTTP endpoint that returns 422 is Day 3)', async () => {
     const check = await validateDestinationUrl('http://169.254.169.254/', {
       allowlist: [],
       resolver: noDns,

@@ -12,7 +12,9 @@ import {
 } from './helpers.js';
 import type { TestTenant, TestWorker } from './helpers.js';
 
-describe('SSRF protection at delivery time', () => {
+// AC9.5 asks for every SEC-SSRF case to pass: 08, 09, 10 and the end-to-end cases are here,
+// 01–07 and 11–13 are unit tests in packages/core/src/ssrf.
+describe('AC9.5 SSRF protection at delivery time', () => {
   let worker: TestWorker;
   /** The same worker configuration with an empty SSRF_ALLOWLIST, as in production. */
   let strictWorker: TestWorker;
@@ -42,7 +44,7 @@ describe('SSRF protection at delivery time', () => {
     return waitForTerminalDelivery(via.prisma, delivery.id);
   }
 
-  it('SEC-SSRF-08 a 302 to http://127.0.0.1 is not followed: PERMANENT_FAILURE / REDIRECT_NOT_FOLLOWED', async () => {
+  it('AC9.3 SEC-SSRF-08 a 302 to http://127.0.0.1 is not followed: PERMANENT_FAILURE / REDIRECT_NOT_FOLLOWED', async () => {
     const internal = `http://127.0.0.1:${receiver.port}/hook/internal-only`;
 
     const done = await deliverTo(
@@ -110,7 +112,7 @@ describe('SSRF protection at delivery time', () => {
     ['an IPv4-mapped loopback address', 'http://[::ffff:127.0.0.1]/'],
     ['a decimal-encoded loopback address', 'http://2130706433/'],
   ])(
-    'SEC-SSRF-02 a destination at %s is SSRF_BLOCKED and DEAD after one attempt',
+    'AC9.2 SEC-SSRF-02 a destination at %s is SSRF_BLOCKED and DEAD after one attempt',
     async (_label, url) => {
       // Through the worker with the empty allowlist, as in production. The test allowlist holds
       // `127.0.0.1`, and the URL parser turns the decimal form into exactly that hostname.
@@ -134,7 +136,7 @@ describe('SSRF protection at delivery time', () => {
     },
   );
 
-  it('SEC-SSRF-05 a destination with a non-http scheme is SSRF_BLOCKED', async () => {
+  it('AC9.3 SEC-SSRF-05 a destination with a non-http scheme is SSRF_BLOCKED', async () => {
     const done = await deliverTo('ftp://127.0.0.1/file');
 
     expect(done).toMatchObject({ status: 'DEAD', lastErrorCode: 'SSRF_BLOCKED', attemptCount: 1 });
@@ -158,7 +160,7 @@ describe('SSRF protection at delivery time', () => {
     expect(receiver.requests('strict-name')).toEqual([]);
   });
 
-  it('SEC-SSRF-12 with localhost on the allowlist, the same delivery succeeds', async () => {
+  it('AC9.4 SEC-SSRF-12 with localhost on the allowlist, the same delivery succeeds', async () => {
     const done = await deliverTo(`http://localhost:${receiver.port}/hook/allowed-name`);
 
     expect(done).toMatchObject({ status: 'SUCCEEDED', attemptCount: 1 });

@@ -133,7 +133,7 @@ describe('createSafeHttpClient', () => {
     expect(Buffer.from(server.seen[0]?.body ?? '', 'utf8').equals(bytes)).toBe(true);
   });
 
-  it('SEC-SSRF-07 DNS rebinding: the connection goes to the first resolved IP and the resolver is called once', async () => {
+  it('AC9.2 SEC-SSRF-07 DNS rebinding: the connection goes to the first resolved IP and the resolver is called once', async () => {
     const server = await startServer(ok);
     // First answer: the address that is checked. Second answer: what a rebinding attacker would
     // serve to a client that resolves again at connect time. Nothing listens on 127.0.0.2, so a
