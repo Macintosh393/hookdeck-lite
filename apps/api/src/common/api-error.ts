@@ -9,6 +9,8 @@ export class ApiError extends Error {
     message: string,
     /** Extra response headers, e.g. Retry-After on a 429. */
     readonly headers: Record<string, string> = {},
+    /** Which fields failed validation, for a 400. Sent as `error.details`. */
+    readonly details?: Array<{ path: string; message: string }>,
   ) {
     super(message);
     this.name = 'ApiError';

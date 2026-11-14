@@ -528,3 +528,6 @@ it is used. The session for the listed day resolves it and records the answer in
 | U5 | Day 1 | All three image tags exist |
 | U6 | Day 1 | BullMQ 6 works on ioredis 6.0.0. Guard: `packages/core/test/bullmq-ioredis.int.test.ts` |
 | U7 | Day 1 | TypeScript 6.0.3, pinned `~6.0.3` |
+| U8 | Day 2 | Confirmed. The worker's `failed` listener fires once per failed attempt, with `job.attemptsMade` 1, 2, 3 for `attempts: 3`. An `UnrecoverableError` fires it once with `attemptsMade` below `attempts`, so the listener must check the error type too. The custom `backoffStrategy` receives `(attemptsMade, 'custom', error)`. Guard: `packages/core/test/bullmq-behaviour.int.test.ts` |
+| U9 | Day 2 | Confirmed. An `add` with the `jobId` of a completed or failed job is ignored (the processor does not run again) until that job is removed; then the id is accepted again. Same guard file |
+| U10 | Day 2 | `new Agent({ connect: { lookup } })` works in undici 8.12: `connect` takes Node's socket options, and `lookup` has the signature of `dns.lookup`, including the `all: true` form that returns an array. The `node:https` fallback was not needed. Guard: `SEC-SSRF-07` in `packages/core/src/ssrf/safe-http-client.test.ts` |

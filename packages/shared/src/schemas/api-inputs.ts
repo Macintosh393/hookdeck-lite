@@ -2,7 +2,7 @@
 // The api validates with them; the dashboard uses the inferred types for its forms.
 // Each schema mirrors one of the same name in docs/api/openapi.yaml. Limits: docs/SECURITY.md#input-limits
 import { z } from 'zod';
-import { VERIFICATION_MODES } from '../enums.js';
+import { DELIVERY_STATUSES, EVENT_STATUSES, VERIFICATION_MODES } from '../enums.js';
 import { parseFilter } from '../filter/schema.js';
 import { verificationConfigSchema } from './verification-config.js';
 
@@ -145,6 +145,57 @@ export const listQuerySchema = z.object({
   cursor: z.string().min(1).max(200).optional(),
 });
 
+/** An ISO-8601 instant with a zone, e.g. `2026-11-12T10:00:00Z`. Kept as a string. */
+const instantSchema = z.iso.datetime({ offset: true });
+
+/** `GET /api/v1/events`: the list query plus its filters. */
+export const eventListQuerySchema = listQuerySchema.extend({
+  sourceId: z.uuid().optional(),
+  status: z.enum(EVENT_STATUSES).optional(),
+  /** Only events received at or after this time. */
+  from: instantSchema.optional(),
+  /** Only events received before this time. */
+  to: instantSchema.optional(),
+});
+
+/** `GET /api/v1/deliveries`: the list query plus its filters. `status=DEAD` is the dead-letter view. */
+export const deliveryListQuerySchema = listQuerySchema.extend({
+  status: z.enum(DELIVERY_STATUSES).optional(),
+  destinationId: z.uuid().optional(),
+  connectionId: z.uuid().optional(),
+  eventId: z.uuid().optional(),
+});
+
+// --- Validation helper -------------------------------------------------------------------------
+
+/** Any of the schemas in this file. Lets the api name the type without depending on zod itself. */
+export type InputSchema = z.ZodType;
+/** What a schema produces: defaults filled in, query-string numbers coerced. */
+export type ParsedInput<Schema extends InputSchema> = z.output<Schema>;
+
+export type InputValidation<T> =
+  { ok: true; value: T } | { ok: false; details: Array<{ path: string; message: string }> };
+
+/**
+ * Runs a schema and reports problems in the `details` shape of the API's error response
+ * (docs/api/openapi.yaml, ErrorResponse). The api and the dashboard's forms both use it, so a
+ * field is described the same way on both sides.
+ */
+export function validateInput<Schema extends InputSchema>(
+  schema: Schema,
+  value: unknown,
+): InputValidation<ParsedInput<Schema>> {
+  const result = schema.safeParse(value);
+  if (result.success) return { ok: true, value: result.data };
+  return {
+    ok: false,
+    details: result.error.issues.map((issue) => ({
+      path: issue.path.map(String).join('.'),
+      message: issue.message,
+    })),
+  };
+}
+
 export type SourceCreateInput = z.infer<typeof sourceCreateSchema>;
 export type SourceUpdateInput = z.infer<typeof sourceUpdateSchema>;
 export type DestinationCreateInput = z.infer<typeof destinationCreateSchema>;
@@ -152,3 +203,5 @@ export type DestinationUpdateInput = z.infer<typeof destinationUpdateSchema>;
 export type ConnectionCreateInput = z.infer<typeof connectionCreateSchema>;
 export type ConnectionUpdateInput = z.infer<typeof connectionUpdateSchema>;
 export type ListQuery = z.infer<typeof listQuerySchema>;
+export type EventListQuery = z.infer<typeof eventListQuerySchema>;
+export type DeliveryListQuery = z.infer<typeof deliveryListQuerySchema>;

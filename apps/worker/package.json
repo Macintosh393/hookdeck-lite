@@ -2,6 +2,30 @@
   "name": "@hdl/worker",
   "version": "0.1.0",
   "private": true,
-  "description": "Plain TypeScript + BullMQ: fan-out, delivery, sweeper. Built on Day 2 (docs/PLAN.md).",
-  "type": "module"
+  "description": "Plain TypeScript + BullMQ: fan-out, delivery with retries, failed-job listeners, sweeper.",
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "dev": "tsx watch src/main.ts",
+    "start": "node dist/main.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "test:integration": "vitest run --config vitest.integration.config.ts"
+  },
+  "dependencies": {
+    "@hdl/core": "workspace:*",
+    "@hdl/database": "workspace:*",
+    "@hdl/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "@hdl/mock-receiver": "workspace:*",
+    "@types/node": "catalog:",
+    "@vitest/coverage-v8": "catalog:",
+    "standardwebhooks": "catalog:",
+    "tsx": "catalog:",
+    "typescript": "catalog:",
+    "vite": "catalog:",
+    "vitest": "catalog:"
+  }
 }

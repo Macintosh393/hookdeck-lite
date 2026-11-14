@@ -237,6 +237,8 @@ What to take from this:
 - A job that stalls more than `maxStalledCount` times (default 1) is moved to `failed` with the reason
   `job stalled more than allowable limit`. The processor does not run for that, so any cleanup must
   happen in a `failed` listener. hookdeck-lite's handling is in [QUEUES.md](../QUEUES.md#stalled-jobs).
+  In BullMQ 6.7 this happens in two steps: the stalled check flags the job and puts it back in the
+  queue, and the worker that takes it next fails it instead of running it (found on Day 2).
 - **Do not block the event loop** in a processor. A long synchronous loop or a huge `JSON.parse` stops
   lock renewal and makes a healthy job look dead. CPU-heavy work belongs in a sandboxed processor (a
   separate process); we have none.
@@ -278,8 +280,9 @@ process.on('SIGINT', () => void shutdown('SIGINT'));     // Ctrl+C
 ```
 
 - `worker.close()` has no timeout of its own. If a job hangs, shutdown hangs, and the platform kills the
-  process anyway (`SIGKILL`) after its grace period. So race it against your own deadline and then call
-  `worker.close(true)` to force.
+  process anyway (`SIGKILL`) after its grace period. So race it against your own deadline. When the
+  deadline wins, a `worker.close(true)` does not help: BullMQ 6.7 returns the promise of the first
+  `close()`. Disconnect the worker's Redis connection instead; the locks then expire (found on Day 2).
 - Jobs that were still active when the process died are not lost. Their locks expire and they are
   re-run as [stalled jobs](#stalled-jobs), possibly producing a duplicate.
 - On **Windows**, `SIGTERM` is never delivered to a Node process. `Ctrl+C` produces `SIGINT`. Handle both.

@@ -11,6 +11,9 @@ export default defineConfig({
       include: ['src/**/*.ts'],
       exclude: ['src/**/*.test.ts', 'src/index.ts'],
       reporter: ['text-summary', 'html'],
+      // docs/TESTING.md#coverage-targets. redis.ts and the enqueue helpers need a real Redis and are
+      // covered by the integration tests, which this unit-test run does not count.
+      thresholds: { lines: 90, branches: 85 },
     },
   },
 });

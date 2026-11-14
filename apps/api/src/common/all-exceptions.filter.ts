@@ -15,6 +15,8 @@ export interface MappedError {
   code: ApiErrorCode;
   message: string;
   headers: Record<string, string>;
+  /** Present only for validation errors that name the failing fields. */
+  details?: Array<{ path: string; message: string }>;
 }
 
 /** Fastify's codes for "the JSON body could not be parsed". */
@@ -60,6 +62,7 @@ export function mapException(exception: unknown, maxBodyBytes: number): MappedEr
       code: exception.code,
       message: exception.message,
       headers: exception.headers,
+      ...(exception.details ? { details: exception.details } : {}),
     };
   }
 
@@ -107,7 +110,12 @@ export class AllExceptionsFilter implements ExceptionFilter {
     }
 
     const body: ErrorResponse = {
-      error: { code: mapped.code, message: mapped.message, requestId },
+      error: {
+        code: mapped.code,
+        message: mapped.message,
+        ...(mapped.details ? { details: mapped.details } : {}),
+        requestId,
+      },
     };
     void reply.status(mapped.status).headers(mapped.headers).send(body);
   }

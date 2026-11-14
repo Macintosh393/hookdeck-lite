@@ -169,6 +169,11 @@ Two details that are easy to get wrong:
 Checking **every** returned address, and rejecting if any is blocked, closes a related trick: a hostname
 with both a public and a private record, hoping the client connects to the second.
 
+Pinning has a cost: a normal client that gets an IPv6 and an IPv4 address tries the next one when the
+first does not connect. A pinned connection has one address and no fallback. The example above pins
+`addresses[0]`; hookdeck-lite pins the first IPv4 address instead, because a host with both records is
+more often unreachable over IPv6 ([ADR-0019](../adr/0019-pin-ipv4-first.md)).
+
 ## Validate at connect time
 
 Put together, the principle is:

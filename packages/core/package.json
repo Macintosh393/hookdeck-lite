@@ -2,7 +2,7 @@
   "name": "@hdl/core",
   "version": "0.1.0",
   "private": true,
-  "description": "Node-only building blocks: env, logger, Redis, queues, HMAC, secret encryption, rate limiter.",
+  "description": "Node-only building blocks: env, logger, Redis, queues, HMAC, secret encryption, rate limiter, backoff, SSRF-safe HTTP client, stream.",
   "type": "module",
   "exports": {
     ".": {
@@ -18,15 +18,17 @@
     "dev": "tsc -p tsconfig.build.json --watch --preserveWatchOutput",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint .",
-    "test": "vitest run",
+    "test": "vitest run --coverage",
     "test:integration": "vitest run --config vitest.integration.config.ts"
   },
   "dependencies": {
     "@hdl/shared": "workspace:*",
     "bullmq": "catalog:",
     "ioredis": "catalog:",
+    "ipaddr.js": "catalog:",
     "pino": "catalog:",
     "pino-pretty": "catalog:",
+    "undici": "catalog:",
     "zod": "catalog:"
   },
   "devDependencies": {

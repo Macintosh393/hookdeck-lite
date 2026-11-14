@@ -159,8 +159,10 @@ A fourth rule follows from how BullMQ starts up. A new `Queue` sends one command
 Redis version) as soon as it is constructed. If that command fails, the Queue never becomes ready and
 every later `add()` waits forever, even after Redis is back. So **the API creates its Queue only once the
 connection is `ready`**, and creates it again if that first command still fails
-(`apps/api/src/infrastructure/fanout-producer.ts`). Until then an enqueue fails immediately, which is the
-same outcome as any other Redis outage: the Event stays `RECEIVED` and the sweeper enqueues it.
+(`apps/api/src/infrastructure/lazy-queue.ts`, used by the fanout producer and by the delivery producer
+that replay adds jobs through). Until then an enqueue fails immediately, which is the
+same outcome as any other Redis outage: the Event stays `RECEIVED` (or the replayed Delivery stays
+`PENDING`) and the sweeper enqueues it.
 
 As a last line of defence the API also wraps each of its Redis calls (rate limit, enqueue, publish, the
 `/ready` ping) in a timeout, for the case where Redis accepts the connection but does not answer.
@@ -342,15 +344,16 @@ its event loop is blocked for too long, the lock expires. Any worker's stalled-c
 | Situation | Result |
 |---|---|
 | Job stalls once | Re-run. `attemptsMade` is not increased. A duplicate delivery is possible |
-| Job stalls more than `maxStalledCount` (1) | BullMQ fails it with `job stalled more than allowable limit`, without running the processor |
+| Job stalls more than `maxStalledCount` (1) | BullMQ fails it with `job stalled more than allowable limit`, without running the processor. In 6.7 the stalled check only flags the job and puts it back in the queue; the Worker that takes it next fails it. So the failure needs a running worker, like everything else |
 | That failure for a `delivery` job | The worker's `failed` listener marks the Delivery `DEAD`, `deadReason = STALLED`, if it is not terminal. If the listener cannot write, the sweeper does it later |
 | That failure for a `fanout` job | The `failed` listener marks the Event `FAILED` if it is still `RECEIVED`; otherwise the sweeper does |
 
 The `failed` listener has the signature `(job: Job | undefined, error: Error, prev: string)` and fires on
 **every** failed attempt, not only the last. It must act only when the job will not run again:
 `error instanceof UnrecoverableError`, or `job.attemptsMade >= job.opts.attempts`, or the stalled-limit message.
-`UNVERIFIED`: that `failed` fires per attempt is from BullMQ 5 behaviour and the v6 type signature; the
-Day 2 session must confirm it with a test.
+Verified on Day 2 against `bullmq@6.7.4` (U8): `failed` fires once per failed attempt, and an
+`UnrecoverableError` fires it once with `attemptsMade` still below `attempts`.
+Guard: `packages/core/test/bullmq-behaviour.int.test.ts`.
 
 ## Sweeper
 
@@ -394,13 +397,16 @@ on SIGTERM or SIGINT (once):
        Promise.all([fanoutWorker.close(), deliveryWorker.close()]),   // stop fetching, wait for active jobs
        timeout(25 000)
      ])
-  3. if the timeout won: await both workers' close(true)               // force; jobs will be seen as stalled
+  3. if the timeout won: disconnect the Workers' Redis connection      // locks expire; jobs will be seen as stalled
   4. close Queue instances, Redis connections, Prisma
   5. process.exit(0)
 ```
 
 - `worker.close()` stops taking new jobs and resolves when the active ones finish. It has no timeout of
   its own, hence the race.
+- Step 3 does not call `worker.close(true)`: in BullMQ 6.7 a second `close()` returns the promise of the
+  first, so it cannot force anything (found on Day 2). Dropping the connection stops the lock renewals,
+  which is all "force" has to achieve. Test: `apps/worker/test/shutdown.int.test.ts`.
 - 25 s is under the platform's kill deadline (Render sends `SIGTERM`, then `SIGKILL` after 30 s by default).
   It is above `DELIVERY_TIMEOUT_MS` (15 s), so every in-flight attempt can finish and be recorded.
 - **Windows:** `SIGTERM` is never delivered on Windows. `Ctrl+C` sends `SIGINT`, which is why both are

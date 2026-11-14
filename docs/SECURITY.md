@@ -230,11 +230,18 @@ because DNS answers can change after creation.
 
 ### Implementation note
 
-Preferred: an `undici` `Agent` whose `connect` options carry a custom `lookup` that performs rules 3–5,
-plus a literal-IP check before dispatch, because `lookup` is not called for IP-literal hosts.
-`UNVERIFIED` for `undici@8`: the exact `connect.lookup` option shape. Fallback with documented core APIs:
-`node:https.request({ lookup, ... })`, whose `lookup` option has the same signature as `dns.lookup`.
-The Day 2 session verifies which one works and records it in the learning log.
+Implemented with `undici@8` (verified on Day 2, U10) in `packages/core/src/ssrf/`:
+
+- `resolve-target.ts` applies rules 1–4 and 9 **before** any socket exists: it parses the URL, resolves
+  the hostname once (or takes an IP literal as it is, because Node never calls `lookup` for a literal),
+  checks every address, and returns the one address to use: the first IPv4 address, or the first
+  address if there is none ([ADR-0019](adr/0019-pin-ipv4-first.md)).
+- `safe-http-client.ts` then creates one `undici` `Agent` for the request with
+  `connect: { lookup }`, where `lookup` answers with that checked address and never queries DNS.
+  That is the pin (rule 5). `lookup` has the signature of `dns.lookup`, including the `all: true` form.
+- `undici.request()` does not follow redirects (rule 6). One `AbortSignal.timeout` covers DNS, connect,
+  headers and body (rule 7). The body is read up to the cap and the Agent is destroyed (rule 8).
+- The same `resolveTarget` backs `validateDestinationUrl`, the create-time check of the api.
 
 ### Blocked ranges
 

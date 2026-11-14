@@ -465,6 +465,8 @@ paths:
       description: |
         Creates a replay for every `DEAD` delivery of this destination that has not been replayed yet,
         up to 1000 per call. Call again while `hasMore` is true. Originals are not modified.
+        Calls for the same destination run one after the other (the destination row is locked for the
+        duration), so two calls at the same moment do not replay a delivery twice.
       responses:
         '202':
           description: Replays created and enqueued.
